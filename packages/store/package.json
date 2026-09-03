@@ -1,0 +1,30 @@
+{
+  "name": "@dlab/store",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SQLite persistence (better-sqlite3) implementing @dlab/core StorePort",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib", "src/schema.sql"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp src/schema.sql lib/schema.sql",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dlab/shared": "workspace:*",
+    "@dlab/core": "workspace:*"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^11.5.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

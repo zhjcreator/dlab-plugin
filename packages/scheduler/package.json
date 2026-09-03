@@ -1,0 +1,28 @@
+{
+  "name": "@dlab/scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GPU discovery + lightweight reservation scheduler (nvidia-smi based)",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dlab/shared": "workspace:*",
+    "@dlab/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

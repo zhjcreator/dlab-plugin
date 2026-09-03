@@ -1,0 +1,41 @@
+# dsh-lab host composition bundle. Applied as the host-plane rows of the
+# profile; rows here provide services / registers tools / wires RPC. The
+# client rows live in @dlab/lab-client and the per-session tool grant lives in
+# @dlab/preset-lab.
+
+- insert:
+    # Internal wiring rows: each is a config entry of the same lab-host plugin
+    # module; distinct ids let HMR replace them individually.
+    - id: lab-host
+      name: '@dlab/lab-host'
+
+    # The concrete ports (git / store / runner / scheduler) are provided as
+    # internal services; the LabService row injects them by name so one
+    # process gets exactly one instance. The actual service keys registered
+    # by the host module: dlabGit, dlabStore, dlabRunner, dlabScheduler,
+    # dlabWorkspaceBridge and lab.
+
+    - id: lab-service
+      name: '@dlab/lab-host'
+      config:
+        role: service
+
+    - id: lab-tools
+      name: '@dlab/lab-host'
+      config:
+        role: tools
+
+    - id: lab-rpc
+      name: '@dlab/lab-host'
+      config:
+        role: rpc
+
+    - id: lab-shell-env
+      name: '@dlab/lab-host'
+      config:
+        role: shell-env
+
+    - id: lab-system-prompt
+      name: '@dlab/lab-host'
+      config:
+        role: system-prompt

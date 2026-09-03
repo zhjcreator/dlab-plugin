@@ -1,0 +1,24 @@
+{
+  "name": "@dlab/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure domain types, id/path validation, and error base classes for dlab-plugin (no DSH dependency)",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

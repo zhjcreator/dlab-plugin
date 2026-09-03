@@ -182,47 +182,224 @@ solutions/main  solutions/agm-cosine  solutions/rae-depth4
 
 ## 5. 插件拓扑（包结构）
 
-首版推荐**单 bundle 包** `dsh-lab-plugin`，内含一个 `cordis.patch.yml`，把所有行都集中到一个 plugin 文件里；如需后续拆分（按 three-roles 设计），在已经有 CLI 验证的稳定核心之上拆分：
+按 **three-roles** + `seams.md` 服务归属规则，插件拆分为 9 个内部包 / 仓库根 layout。设计原则：服务归属判断以 *seams.md* 表为准——「模型提供方/执行者/存储后端」放 host-plane 行，跨 session 共享的东西放 host composition；preset 只贡献会话内的 tool / persona / prompt section。
 
 ```text
-dsh-lab-plugin/
-├── package.json                    # dsh.bundle → ./cordis.patch.yml
-├── cordis.patch.yml                # 全部 plugin 行
-├── README.md                       # 安装 + 用法
-└── src/
-    ├── core/                       # 纯领域：Solution、Run、RunProfile；不依赖 DSH
-    │   ├── types.ts
-    │   ├── solution-service.ts
-    │   ├── run-service.ts
-    │   └── ...
-    ├── git/                        # 唯一允许 exec("git …") 的位置
-    │   └── git-service.ts
-    ├── store/                      # SQLite repository
-    │   └── sqlite-store.ts
-    ├── runner/                     # 进程管理
-    │   └── process-runner.ts
-    ├── scheduler/                  # GPU 探测 + 资源 reservation
-    │   └── gpu-scheduler.ts
-    ├── host/                       # DSH Host 适配（注入 ctx.lab、注册 Tool、注册 RPC 端点）
-    │   ├── lab-service.ts
-    │   ├── rpc.ts                  # endpoint dispatch
-    │   └── tools/
-    │       ├── lab-status.ts
-    │       ├── lab-solution.ts
-    │       └── lab-run.ts
-    ├── client/                     # 浏览器半（首版可空，后续加 UI）
-    │   └── ui/
-    │       └── lab-page.tsx
-    └── cli/                        # dsh-lab 命令行（不依赖 DSH）
-        └── dsh-lab.ts
+dlab-plugin/                                  ← 仓库根(pnpm workspace)
+├── package.json                              # private root, scripts: build/test/lint
+├── pnpm-workspace.yaml                       # 9 个内部包
+├── tsconfig.base.json
+├── README.md
+├── docs/
+│   └── DESIGN.md                             # 本文档
+├── .gitignore
+├── .dsh/skills/                              # 项目级 skills
+│   ├── dsh-plugin-dev/                       # DSH 插件开发参考
+│   └── dsh-scholar/                          # 测试沙地说明(指向 /home2/.../dsh-scholar/)
+├── packages/
+│   ├── shared/                               # 仅类型 + ULID + 错误基类 + zod schema, 无 DSH 依赖
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── ids.ts                        # ULID 生成、Solution/Run id 校验
+│   │       ├── errors.ts                     # LabError 基类 + 子类
+│   │       ├── paths.ts                      # slug/path 校验, 防止 ../ 越界
+│   │       └── types.ts                      # SolutionStatus、RunStatus、ExperimentRun、Solution 等纯领域类型
+│   │
+│   ├── core/                                 # 业务用例编排;不依赖 DSH
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── solution-service.ts           # init/fork/checkpoint/archive/restore/diff/merge
+│   │       ├── run-service.ts                # snapshot/start/stop/compare
+│   │       ├── reconcile.ts                  # 启动时校对 Git / FS / SQLite / DSH Workspace
+│   │       ├── events.ts                     # core 内部事件 (非 Cordis 事件)
+│   │       └── ports.ts                      # 抽象端口:GitPort、StorePort、RunnerPort、SchedulerPort、WorkspacePort(DSH)
+│   │
+│   ├── git/                                  # 唯一允许执行 `git ...` 的位置
+│   │   ├── package.json
+│   │   └── src/
+│   │       └── git-port.ts                   # GitPort 的本机实现:execFile('git', ...)
+│   │
+│   ├── store/                                # SQLite 持久化
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── schema.sql                    # 完整 DDL
+│   │       ├── migrations.ts                 # 启动期 idempotent migration
+│   │       ├── sqlite-store.ts               # StorePort 实现, 含 schema cache
+│   │       └── repository/                   # projects/solutions/runs/metrics/tags/profiles/env/reservations/events
+│   │
+│   ├── runner/                               # 进程管理
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── local-runner.ts               # RunnerPort 的本机实现:ctx.subprocess 包装
+│   │       ├── log-tee.ts                    # stdout/stderr → 文件 + tail buffer
+│   │       └── reconcile.ts                  # 启动时 PID 存活探测
+│   │
+│   ├── scheduler/                            # GPU 资源调度
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── nvidia-smi.ts                 # 解析 `nvidia-smi --query-gpu=...`
+│   │       ├── gpu-scheduler.ts              # SchedulerPort 实现:queue + reservation
+│   │       └── reconcile.ts                  # reservation 表 reconcile
+│   │
+│   ├── lab-host/                             # ★ DSH Host composition bundle
+│   │   ├── package.json                      # dsh.bundle → ./cordis.patch.yml
+│   │   ├── cordis.patch.yml                  # 全部 host-plane 行
+│   │   └── src/
+│   │       ├── lab-service.ts                # ctx.lab (Service 子类)
+│   │       ├── rpc.ts                        # /dlab channel dispatch
+│   │       ├── tools/                        # lab_* Model Tools
+│   │       │   ├── lab-status.ts
+│   │       │   ├── lab-solutions.ts
+│   │       │   ├── lab-runs.ts
+│   │       │   └── lab-resources.ts
+│   │       ├── system-prompt.ts              # systemPrompt.section() 注册 Lab Context
+│   │       └── shell-env.ts                  # shellEnv.register(DSH_LAB_*)
+│   │
+│   ├── lab-client/                           # ★ DSH Client composition bundle
+│   │   ├── package.json                      # dsh.bundle (client row)
+│   │   ├── cordis.patch.yml                  # dsh.client 行
+│   │   └── src/
+│   │       ├── client.ts                     # dsh.client.inject apply()
+│   │       ├── lab-model.ts                  # ClientLabModel (snapshot + subscribe)
+│   │       └── ui/                           # 浏览器半 React 组件,slots.register
+│   │           ├── lab-button.tsx            # 注册到 conversation.session.header.actions
+│   │           ├── lab-panel.tsx             # 主面板,内容组件通过 slots.inject 注入
+│   │           └── tabs/                     # Solutions / Experiments / Compare / Resources / Environment
+│   │
+│   ├── cli/                                  # ★ dsh-lab CLI 单独 npm package, 不依赖 DSH
+│   │   ├── package.json
+│   │   ├── bin/
+│   │   │   └── dsh-lab                       # #!/usr/bin/env node → dist/cli.js
+│   │   └── src/
+│   │       ├── index.ts                      # commander entry
+│   │       └── commands/                     # status / solution / run
+│   │
+│   └── preset-lab/                           # ★ Agent preset bundle — 把 lab_* tools 加到每个 session
+│       ├── package.json                      # dsh.bundle (agent preset row)
+│       ├── preset.yml                        # name + description
+│       ├── agent.cordis.yml                  # 单行 tool-grant,所有 lab_* tool 注册到 ctx.tools
+│       └── skills/                           # bundled skills(可选,跟 plugin 一起分发)
+│           └── dlab-using/SKILL.md
+│
+└── tests/
+    ├── unit/                                 # core/store/shared 纯单测
+    ├── integration/                          # GitService + SQLite 真实 git/fs 操作(用 dsh-scholar 作为 fixture 根)
+    ├── e2e/                                  # CLI + LabService 完整闭环
+    └── concurrency/                          # 两个 Run 并发、merge 期间 fork 等场景
 ```
 
-原则：
+### 5.1 拆分理由（不再做单 bundle）
 
-* `core/` 完全不知道 DSH。
-* `cli/` 直接调用 `core/`，验证完整生命周期。
-* `host/` 是 DSH 适配层，只在 `apply(ctx)` 内做 Service/Tool/RPC 注册；不重写业务。
-* `client/` 通过 `ctx.connection.rpc.call('/dlab', ...)` 与 Host 通信。
+第 5 节原版「单 bundle」是早期收敛选择的写法，但 9 包拆分已经在工程上明显更稳：
+
+| 拆开的好处                                            | 体现为                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------- |
+| **DSH Host plane 与 Core 严格解耦**                    | `core/`、`git/`、`store/`、`runner/`、`scheduler/`、`cli/`、 `shared/` 完全不 import `@deepseek-ai/cordis` 或任何 `@deepseek-ai/dsh-*` |
+| **DSH Client plane 与 Host plane 严格解耦**           | `lab-client/` 只被 `dsh web` 加载,`lab-host/` 只被 host 加载       |
+| **按 three-roles 角色命名**                            | `core/` = Service Definition 角色;`git/`、`store/`、`runner/`、`scheduler/` = Service Provider 角色;`lab-host/` 与 `lab-client/` = Consumer + Slot 注册 |
+| **能并行开发/独立发版**                                | 每个包一个 `package.json`,未来能 npm publish;现阶段用 pnpm workspace |
+| **测试金字塔与生产代码一一对应**                      | `tests/{unit,integration,e2e,concurrency}` 与每个 src 包对应       |
+
+### 5.2 服务归属（按 seams.md）
+
+| ctx 键                       | 归属包         | plane     | 说明                                  |
+| ---------------------------- | -------------- | --------- | ------------------------------------- |
+| `ctx.lab`                    | `lab-host`     | host      | 全 process 唯一实例                   |
+| `ctx.labClientRpc`           | `lab-host`     | host      | `/dlab` channel handle                |
+| `ctx.labHostConfig`          | `lab-host`     | host      | 配置 + `solutionRoot` 解析            |
+| `ctx.workspaceRegistry.create/delete` 的桥接 | `lab-host` | host      | 只 host 调, 不能放 preset              |
+| Lab 浏览器半 slots (`sidebar.*` / `shell.overlay` / `conversation.*`) | `lab-client` | client | `dsh.client.inject` 入口, slots.register |
+| `systemPrompt.section()` 注册 Lab Context | `lab-host`    | host      | 写到 host 的 prompt 段落；用 scope 局部覆盖时由 preset 切 |
+| `shellEnv.register(DSH_LAB_*)`           | `lab-host`    | host      | 跨 session 共享, host plane           |
+| Agent preset 中的 tool 注册                | `preset-lab`  | agent     | 多个 session 共享 host tools 注册,必须放在 preset realm 之外(preset 仅消费, 不发布服务) |
+
+### 5.3 为什么不把 `core/`/`git/`/`store/` 拆成独立 npm 包
+
+首版选择 **pnpm workspace（仓库内单仓 monorepo）**，因为：
+
+* Phase 1 主要靠 `cli/` 验证生命周期,发版节奏跟着 DSH 走
+* `core/` 与 `git/`/`store/` 之间的接口紧（`GitPort` 是 interface,但实现只在 git/ 包内）
+* 减少 install / link / version pin 的复杂度
+
+未来若 `core/` 被多个 bundle 复用、或有外部插件想提供自己的 `GitPort` 实现,再把 `core/` 拆成独立 `@dlab/core` npm 包;此时把 `ports.ts` 拆成 `@dlab/ports`。
+
+### 5.4 Phase 1 的最小可验证闭环
+
+首版**必须**先在 CLI 上跑通：
+
+```text
+1.  dsh-lab status                  (无 lab state 时给出 init 引导)
+2.  dsh-lab init --root /home2/.../dsh-scholar
+3.  dsh-lab solution fork main agm-cosine
+4.  (在 solutions/agm-cosine/ 改代码)
+5.  dsh-lab solution checkpoint agm-cosine -m "AGM cosine schedule"
+6.  dsh-lab solution merge agm-cosine --target pgu-cosine --mode into-fork
+7.  dsh-lab solution archive agm-cosine
+8.  dsh-lab solution restore agm-cosine
+9.  dsh-lab environment fingerprint   (打印 env:<hash>)
+```
+
+以上跑通且 Scenario A-I 全部通过,才进入 Phase 2。
+
+### 5.5 cordis.patch.yml 写法示例（lab-host）
+
+```yaml
+# packages/lab-host/cordis.patch.yml
+- insert:
+    - id: lab-store
+      name: '@dlab/lab-host/store-row'
+
+    - id: lab-storage-domain
+      name: '@dlab/lab-host/storage-domain-row'
+
+    - id: lab-git
+      name: '@dlab/lab-host/git-row'
+
+    - id: lab-runner
+      name: '@dlab/lab-host/runner-row'
+
+    - id: lab-scheduler
+      name: '@dlab/lab-host/scheduler-row'
+
+    - id: lab-shell-env
+      name: '@dlab/lab-host/shell-env-row'
+
+    - id: lab-system-prompt
+      name: '@dlab/lab-host/system-prompt-row'
+
+    - id: lab-tools
+      name: '@dlab/lab-host/tools-row'
+
+    - id: lab-rpc
+      name: '@dlab/lab-host/rpc-row'
+      inject: [connection]
+
+    - id: lab-service
+      name: '@dlab/lab-host/lab-service-row'
+      inject:
+        - workspaceRegistry
+        - tools
+        - storageDomain
+        - sessionPersistence
+```
+
+每个 `*-row` 行是同一个 `lab-host/src/index.ts` 导出的不同 config entry,组合时按 id 区分,这样 HMR 时能单独热替换每行。
+
+> **注**：上面第 5 节开头到 5.5 的示例，实际源码已演进为 **pnpm workspace monorepo**（见 §5 树 + README），实现以 `packages/` 下的真实目录为准，本节示例保留用于说明 cordis.yml 行内按 `role` 区分的单模块多行写法。
+
+### 5.6 DSH 服务/工具/Slot 的实际接线摘要
+
+| 接线点 | lab-host | lab-client | preset-lab | 备注 |
+| ------ | -------- | ---------- | ---------- | ----- |
+| `ctx.lab` Service | `LabService extends Service` | — | — | host 唯一实例 |
+| `/dlab` RPC channel | `ctx.connection.rpc.handle('/dlab', dispatch)` | `ctx.connection.rpc.call('/dlab', …)` | — | 信封 `RpcResult<T>` |
+| `DSH_LAB_*` env | `ctx.shellEnv.register` | — | — | 每个 shell 调用注入 |
+| lab context prompt | `systemPrompt.section()` | — | — | 随 workspace 切换变化 |
+| `lab_*` tools | 注册（execute 内调 `ctx.lab`） | — | `tool-dlab-lab` 行 grant 到 preset | preset 只放 tool 行 |
+| Lab 入口按钮 + 面板 | — | slots.register（名以 inspect 为准） | — | `dsh.client` 行 |
+| Agent preset | — | — | `agent.cordis.yml` | 不发布服务 → 无需 realm |
+
+> 原则（与 §5.2 服务归属一致）：提供服务的行一律在 host plane（`lab-host`）；preset-plane 只放「消费 host tools 注册」的 tool 行；浏览器半只放 slot 注册。`preset-lab` 不提供任何服务，因此其 tool 行不需要 isolate realm（skill: editing-cordis-compositions）。
 
 ---
 

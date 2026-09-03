@@ -1,0 +1,19 @@
+# dlab-lab agent preset.
+#
+# Rows here are agent-plane: they register into THIS preset's layer of the
+# host `tools` registry and the host `systemPrompt` service. They publish no
+# services, so no isolate realm is needed — a preset must only wrap a row in a
+# realm when the row itself publishes a service.
+#
+# lab tools resolve the HOST-provided `lab` service via ctx.get (they never
+# publish a service themselves). The host rows that provide lab / git / store
+# / runner / scheduler live in the host composition (@dlab/lab-host), because
+# they are shared across every session.
+
+# The lab_* tools (registered into this preset's tools layer). The tool plugin
+# itself publishes nothing; it consumes the host 'lab' service.
+- id: tool-dlab-lab
+  name: '@dlab/lab-tool-set'
+  inject:
+    - tools
+  config: {}

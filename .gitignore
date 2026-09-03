@@ -14,6 +14,16 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# build outputs
+lib/
+dist/
+*.tsbuildinfo
+
+# SQLite / lab state (never commit user labs)
+*.sqlite
+*.sqlite-*
+
+
 # Editor / OS
 .idea/
 .vscode/
@@ -33,3 +43,8 @@ __pycache__/
 # 临时文件
 *.tmp
 *.bak
+
+# 用户级 lab 目录 (运行时产生)
+.dlab/
+experiments/
+solutions/

@@ -1,0 +1,30 @@
+{
+  "name": "@dlab/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dsh-lab command line — full lifecycle validation without DSH",
+  "type": "module",
+  "main": "./lib/index.js",
+  "bin": {
+    "dsh-lab": "./bin/dsh-lab.js"
+  },
+  "files": ["lib", "bin"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dlab/shared": "workspace:*",
+    "@dlab/core": "workspace:*",
+    "@dlab/git": "workspace:*",
+    "@dlab/store": "workspace:*",
+    "@dlab/runner": "workspace:*",
+    "@dlab/scheduler": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
