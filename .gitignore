@@ -6,7 +6,6 @@
 .skills/
 _probe/
 scratch-*/
-dsh-scholar/
 
 # Node
 node_modules/
