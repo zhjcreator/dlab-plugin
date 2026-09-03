@@ -281,18 +281,33 @@ interface Solution {
                │ ACTIVE │
                └───┬─────┘
                    │
-          ┌────────┴────────┐
-          │                  │
-       Archive             Merge
-          │                  │
-          ▼                  ▼
-    ┌──────────┐        ┌────────┐
-    │ ARCHIVED │        │ MERGED │
-    └────┬─────┘        └────┬───┘
-         │                   │
-      Restore             Restore
-         │                   │
-         └────────► ACTIVE ◄─┘
+          ┌────────┼─────────────┐
+          │        │             │
+       Archive   Merge to     Merge Fork
+          │      Main           to Fork
+          │        │             │
+          │        ▼             ▼
+          │   ┌────────┐    ┌────────┐
+          │   │ MERGED │    │ MERGED │
+          │   └────┬───┘    └────┬───┘
+          │        │             │
+          │     Restore       Restore
+          │        │             │
+          │        └──────┬──────┘
+          │               │
+          │               ▼
+          │          ┌────────┐
+          │          │ ACTIVE │（保留 worktree，可继续迭代）
+          │          └────────┘
+          │
+          ▼
+    ┌──────────┐
+    │ ARCHIVED │
+    └────┬─────┘
+         │
+      Restore
+         │
+         └────────► ACTIVE ◄────（同上）
 ```
 
 状态约束：
@@ -409,6 +424,133 @@ branch 保留
 ```
 
 ---
+
+## 12.1 Merge Fork → Fork（合并两个实验方案）
+
+合并不仅限于「实验方案 → main」。两个实验方案经常需要互相合入（例如 `agm-cosine` 想吸收 `pgu-cosine` 的改动做组合实验），或者一个方案想合入另一个方案作为其下一步迭代的基线。
+
+支持三种模式：
+
+### 12.1.1 Merge mode = `into-target`
+
+把 source 方案的全部提交合入 target 方案的 branch。target 方案的 worktree 保留并刷新，source 方案标记为 merged 并被默认 archive。
+
+```text
+Merge A → B
+─────────────────────────
+mergeBase  = git merge-base A B
+result     = git merge --no-ff B A  （在 B 的 worktree 里执行）
+
+B.head_commit  = merge commit
+B.worktree     = 保留（worktree 路径下执行 merge）
+A.status       = merged
+A.mergedIntoSolutionId = B.id
+A.mergeCommit  = merge commit
+A.worktree     = 默认 archive
+```
+
+使用场景：B 想吸收 A 的修改作为后续迭代起点。
+
+### 12.1.2 Merge mode = `into-fork`（推荐默认）
+
+把 source 方案的 commit 历史移植到 target 方案 branch 上，**保留 source 的所有 commit 与作者**。语义等价于「把 source branch 当成 target 的一个 topic branch」。这是实验方案互相合入最常见的诉求。
+
+实现：
+
+```text
+Merge A → B (into-fork)
+─────────────────────────
+mergeBase  = git merge-base A B
+result     = git merge --no-ff B A   （在 B 的 worktree 里执行；B 是 target）
+
+B.head_commit = merge commit
+A 保持 active；B 上现在带有 A 的所有 commit（通过 merge commit）
+```
+
+**A 不变成 merged 状态**——它的所有 commit 现在存在于 B 的历史中，但 A 自己的 branch 仍然可以继续修改、跑 Run、再合入 main。这是「继续 fork 多方向」的常见需求。
+
+### 12.1.3 Merge mode = `consolidate`
+
+把 source 方案的 commit 历史 squash 后合入 target。**仅当用户明确选择**才提供，因为会丢失 source 的逐 commit 信息：
+
+```text
+git merge --squash A
+git commit -m "[dsh-lab] consolidate <source-slug> into <target-slug>"
+```
+
+不推荐默认使用；UI 显式勾选 `Squash commits` 才走这条路径。
+
+### 12.1.4 输入
+
+```ts
+interface MergeSolutionInput {
+  sourceSolutionId: string;                // 必填；A
+  targetSolutionId: string;                // 必填；B；不能等于 source
+  mode: 'into-target' | 'into-fork' | 'consolidate';
+  message?: string;
+  archiveSource?: boolean;                 // 仅 into-target / consolidate 默认 true；into-fork 默认 false
+}
+```
+
+`LabService.solutions.merge(input)` 的语义：
+
+* `into-target`：source 标记为 merged；默认 archive source workspace。
+* `into-fork`：source 保持 active（branch + worktree + DSH Workspace 都在），但其 HEAD 之上多了一次合入；source 不再「孤立」，其 commit 历史已嵌入 target branch。
+* `consolidate`：source 标记为 merged；squash 后只留下一个 commit 在 target。
+
+### 12.1.5 双向合并与 cross-branch conflicts
+
+实验方案互相合入容易出冲突。preflight 必须执行：
+
+```bash
+git merge-tree --write-tree B A
+```
+
+* 若预计冲突：UI 显示 `Merge conflicts detected` 列表；提供「Open Merge Workspace」让用户在 source worktree 里手动解决，再回来点「Resume Merge」。
+* 禁止自动 commit 出 conflict 状态让用户事后才发现。
+
+### 12.1.6 与「merge into main」的关系
+
+* 「Merge to Main」是 `into-target` 的特化：`target = main, archiveSource = true`。
+* 「Merge Fork → Fork」是 `into-target` / `into-fork` / `consolidate` 的三种模式，目标不是 main。
+* 同一份 `mergeSolutions(input)` API 处理所有情形；UI 上拆成两种入口「Merge to Main」与「Merge to Another Fork」。
+
+### 12.1.7 CLI / Tool 改动
+
+CLI：
+
+```bash
+dsh-lab solution merge <source-slug> --target <target-slug> [--mode into-fork] [--no-archive] [--message ...]
+```
+
+Tool：
+
+```ts
+ctx.tools.register(defineTool({
+  name: 'lab_merge_solution',
+  // 与 mergeToMain 复用同一工具；通过 targetSolutionId 是否 = "main" 区分
+  parameters: {
+    sourceSolutionId: { type: 'string', required: true },
+    targetSolutionId: { type: 'string', required: true },
+    mode: { type: 'string', enum: ['into-target', 'into-fork', 'consolidate'], default: 'into-fork' },
+    archiveSource: { type: 'boolean', default: undefined },
+    message: { type: 'string' },
+  },
+}))
+```
+
+UI：Solution Detail 页面增加「Merge into…」按钮，弹出 Solution 选择器，默认 mode `into-fork`。
+
+### 12.1.8 状态机修正
+
+合并 fork → fork 不应总是把 source 推到 merged/archived。新增不变式：
+
+* `into-target` 且 `archiveSource=true`：source 走 merged → 可选 archived。
+* `into-target` 且 `archiveSource=false`：source 走 merged 但保留 worktree 与 branch。
+* `into-fork`：source 保持 active；target.head_commit 更新。
+* `consolidate`：source 走 merged；默认 archive。
+
+`merged_into_solution_id` 表达合并方向；`merge_commit` 记录这次合入产生的提交。
 
 ## 13. Compare Solution
 
@@ -713,7 +855,7 @@ class LabService extends Service {
     checkpoint(input): { commit: string }
     archive(input): void
     restore(id): void
-    mergeToMain(input): MergeResult
+    merge(input: MergeSolutionInput): MergeResult       // 统一入口：target=main 表示 merge-to-main
     diff(a, b): DiffView
   }
 
@@ -831,13 +973,13 @@ dsh-lab solution checkpoint <slug> [--message ...]
 dsh-lab solution archive <slug> [--conclusion ...]
 dsh-lab solution restore <slug>
 dsh-lab solution diff <slug-a> <slug-b>
-dsh-lab solution merge <slug> --target main
+dsh-lab solution merge <source-slug> --target <target-slug> [--mode into-fork|into-target|consolidate] [--no-archive] [--message ...]
 dsh-lab run start <slug> [--profile <id>] [--title ...] [--tag ...]
 dsh-lab run list
 dsh-lab run stop <run-id>
 ```
 
-CLI 直接调 `core/`。在 CLI 验证完 `Init → Fork → Modify → Archive → Restore → Merge → Run` 闭环之前，不要做大规模 UI。
+CLI 直接调 `core/`。在 CLI 验证完 `Init → Fork → Modify → Archive → Restore → Merge (任意两个 Solution) → Run` 闭环之前，不要做大规模 UI。
 
 ---
 
@@ -912,10 +1054,21 @@ SQLite schema + migrations
 GitService (fork/checkpoint/worktree add-remove/branch/diff/merge)
 SolutionService
 init / fork / checkpoint / archive / restore / diff / merge
+  merge: 同一 API 接受 target=main（merge-to-main）与 target=其他 solution（merge-fork-to-fork）
+  mode: into-target | into-fork | consolidate
+  preflight: git merge-tree 探测冲突
 reconcile (启动时校对 Git/FS/DB)
 CLI：dsh-lab status/solution/run
 Git integration tests + crash tests + concurrency tests
 ```
+
+**Phase 1 必须**包含针对 fork → fork merge 的专项测试：
+
+* 两个 fork 都从 main 分出，互不相关 → merge 干净（no conflict）
+* 两个 fork 修改同一文件同一区域 → merge-tree 报告冲突 → UI/CLI 抛错，不写半成品
+* into-fork 后 source 仍能继续 commit + 跑 Run
+* consolidate 后 source 的 commit 历史 squash 后只剩 1 个 commit
+* merge 进行中 DSH 崩溃 → 启动 reconcile 探到 orphan merge state → 报 broken
 
 ### Phase 2 — DSH Host
 
@@ -999,6 +1152,9 @@ merge conflict 工作流
 | D    | Restore `agm-cosine`                              | `solutions/agm-cosine/` 重新出现；代码与 archive commit 一致                       |
 | E    | Merge `agm-cosine` → main                         | main 包含 AGM 修改；git graph 保留 merge relation；branch 保留；worktree 移除      |
 | F    | 同时 3 个 Agent 在 AGM / RAE / Query32 工作        | 代码不互相覆盖；`.venv` 共享；Run 都写 `experiments/`；互不抢 GPU                 |
+| G    | Merge `agm-cosine` → `pgu-cosine`（into-fork）    | `pgu-cosine` HEAD 上多一个 no-ff merge commit；`agm-cosine` 保持 active；两条 branch 都在；都能继续 run |
+| H    | Merge 两个 fork 修改同一文件同一行（into-target）  | preflight 报 conflict；DB 状态不写半成品；提示用户去 Open Merge Workspace         |
+| I    | Merge `agm-cosine` → `pgu-cosine`（consolidate）  | `pgu-cosine` 上多一个 squash commit；`agm-cosine` 标记 merged；`agm-cosine` branch 保留但默认 archive |
 
 ---
 
@@ -1019,11 +1175,14 @@ merge conflict 工作流
 2. 在仓库下创建 src/core/, src/git/, src/store/, src/cli/ 子目录与 package.json。
 3. 定义 domain types（src/core/types.ts）。
 4. 实现 SQLite schema（src/store/schema.sql）+ migration runner（src/store/sqlite.ts）。
-5. 实现 GitService（src/git/git-service.ts），封装所有 git 命令。
+5. 实现 GitService（src/git/git-service.ts），封装所有 git 命令，包括 merge-tree preflight 与 no-ff merge。
 6. 实现 SolutionService（src/core/solution-service.ts）覆盖 init/fork/checkpoint/archive/restore/diff/merge。
-7. 实现 reconcile：启动时对比 git worktree list / branch / DB。
-8. 写 Git integration tests + crash tests + concurrency tests。
-9. 实现 CLI（src/cli/dsh-lab.ts）—— 验证 Init → Fork → Modify → Archive → Restore → Merge 闭环。
+   - merge 统一入口：mergeToMain 与 mergeForkToFork 共享同一个底层 mergeSolutions(input: MergeSolutionInput)。
+   - mode = into-target | into-fork | consolidate；archiveSource 控制 source 后续动作。
+7. 实现 reconcile：启动时对比 git worktree list / branch / DB；orphan merge state 标 broken。
+8. 写 Git integration tests + crash tests + concurrency tests；
+   必须覆盖 Scenario G/H/I（fork → fork merge、conflict、consolidate）。
+9. 实现 CLI（src/cli/dsh-lab.ts）—— 验证 Init → Fork → Modify → Archive → Restore → Merge (含 fork → fork) → Run 闭环。
 10. CLI 稳定后，才开始接入 DSH Host Service / Remote / Client / UI。
 11. 接入前先用 cordis_inspect_list 拿到真实的 Service/Event/Slot 列表，再用 cordis_inspect_query 查 ctx.workspaceRegistry.create/delete、ctx.subprocess.spawn、ctx.shellEnv.register、ctx.connection.rpc.handle、ctx.slots.register 的具体签名。
 12. UI 阶段同样先用 Slots.listSubTree 拿到真实 slot 名，不要猜。

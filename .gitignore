@@ -1,0 +1,36 @@
+# DSH / Agent Skills — 项目级元数据,不入 git
+.dsh/
+.agents/
+
+# Agent scratch / probe
+.skills/
+_probe/
+scratch-*/
+dsh-scholar/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Python (若 LabGraph v4 引入 .venv 共享环境)
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# 临时文件
+*.tmp
+*.bak
