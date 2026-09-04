@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
 		var h = React.createElement;
 		var useState = React.useState;
 		var useEffect = React.useEffect;
-		var useCallback = React.useMemo;
+		var useCallback = React.useCallback;
 		var useMemo = React.useMemo;
 		var createPortal = require('react-dom').createPortal;
 
