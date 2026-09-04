@@ -218,6 +218,96 @@ export class LabService extends Service {
     get: async (): Promise<EnvironmentView> => this.core.environmentView(),
   }
 
+  // ── research evolution graph (derived projection) ─────────────────────
+
+  /**
+   * Build the research evolution graph: main milestones on a horizontal
+   * line, experiments as branches with fork/merge edges, delta metrics.
+   */
+  graph = {
+    get: async (): Promise<unknown> => {
+      // use view projections (has parentSlug, mergedIntoSlug, bestSummary)
+      const views = await this.solutions.list()
+      const runs = await this.core.runs.list()
+      const events = await this.core.deps.store.listEvents(20)
+
+      const bySlug: Record<string, (typeof views)[number]> = {}
+      views.forEach((v) => { bySlug[v.slug] = v })
+
+      // best metric per solution
+      const bestMetric: Record<string, number> = {}
+      for (const v of views) {
+        if (v.bestSummary) {
+          const entries = Object.entries(v.bestSummary)
+          if (entries.length > 0 && entries[0]) bestMetric[v.slug] = entries[0][1]
+        }
+      }
+
+      // derive main milestones from merge history
+      const merged = views
+        .filter((v) => v.mergedIntoSlug === 'main')
+        .sort((a, b) => (a.lastRunAt ?? 0) - (b.lastRunAt ?? 0))
+
+      const milestones: Record<string, unknown>[] = [
+        { id: 'v1', label: 'v1', metric: bestMetric['main'], source: null },
+      ]
+      merged.forEach((m, i) => {
+        milestones.push({
+          id: 'v' + (i + 2), label: 'v' + (i + 2),
+          metric: bestMetric[m.slug], source: m.slug,
+        })
+      })
+
+      // nodes
+      const nodes: Record<string, unknown>[] = views.map((v) => {
+        const parentMetric = v.parentSlug ? bestMetric[v.parentSlug] : bestMetric['main']
+        const myMetric = bestMetric[v.slug]
+        const delta = myMetric !== undefined && parentMetric !== undefined
+          ? myMetric - parentMetric : undefined
+        return {
+          id: v.slug, label: v.name || v.slug,
+          role: v.role, status: v.status,
+          parent: v.parentSlug || 'main',
+          mergedInto: v.mergedIntoSlug,
+          branch: v.branch, headCommit: v.headCommit,
+          metric: myMetric, delta,
+          hypothesis: v.hypothesis, conclusion: v.conclusion,
+          runCount: v.runCount,
+          dirty: v.dirty,
+          lastRunAt: v.lastRunAt,
+        }
+      })
+
+      // edges
+      const edges: Record<string, unknown>[] = []
+      views.forEach((v) => {
+        if (v.role === 'main') return
+        edges.push({ from: v.parentSlug || 'main', to: v.slug, type: 'fork' })
+        if (v.mergedIntoSlug === 'main') {
+          const mileIdx = merged.findIndex((m) => m.slug === v.slug)
+          if (mileIdx >= 0) {
+            edges.push({ from: v.slug, to: 'v' + (mileIdx + 2), type: 'merge' })
+          }
+        }
+      })
+
+      // activity
+      const activity = events.map((e) => ({
+        time: e.createdAt, type: e.type, entityId: e.entityId,
+        text: formatEventText(e),
+      }))
+
+      return { milestones, nodes, edges, activity }
+    },
+  }
+
+  events = {
+    list: async (limit?: number): Promise<unknown> => {
+      const events = await this.core.deps.store.listEvents(limit ?? 20)
+      return events.map((e) => ({ ...e, text: formatEventText(e) }))
+    },
+  }
+
   // ── lifecycle hooks ──────────────────────────────────────────────────────
 
   async init(): Promise<SolutionView> {
@@ -225,6 +315,23 @@ export class LabService extends Service {
     const view = await this.core.solutionView(main)
     void this.refreshContext().catch(() => {})
     return view
+  }
+}
+
+function formatEventText(e: { type: string; entityId?: string; payloadJson?: string }): string {
+  let payload: Record<string, unknown> = {}
+  try { payload = e.payloadJson ? JSON.parse(e.payloadJson) : {} } catch { /* ignore */ }
+  switch (e.type) {
+    case 'SolutionForked': return `${e.entityId ?? ''} forked${payload.branch ? ' → ' + String(payload.branch) : ''}`
+    case 'SolutionArchived': return `${e.entityId ?? ''} archived`
+    case 'SolutionRestored': return `${e.entityId ?? ''} restored`
+    case 'SolutionMerged': return `${e.entityId ?? ''} merged${payload.branch ? ' (' + String(payload.branch) + ')' : ''}`
+    case 'RunCreated': return `run created: ${e.entityId ?? ''}`
+    case 'RunStarted': return `run started: ${e.entityId ?? ''}`
+    case 'RunCompleted': return `run completed: ${e.entityId ?? ''}`
+    case 'RunFailed': return `run failed: ${e.entityId ?? ''}`
+    case 'RunCanceled': return `run canceled: ${e.entityId ?? ''}`
+    default: return e.type
   }
 }
 

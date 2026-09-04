@@ -124,6 +124,8 @@ export class LabCore {
       dirty,
       parentSlug: parent?.slug,
       mergedIntoSlug: mergedInto?.slug,
+      hypothesis: solution.hypothesis,
+      conclusion: solution.conclusion,
       runCount: all.length,
       lastRunAt: all[0]?.createdAt,
     }

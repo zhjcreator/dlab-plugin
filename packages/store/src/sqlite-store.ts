@@ -336,6 +336,14 @@ export class SqliteStore implements StorePort {
     return Promise.resolve()
   }
 
+  listEvents(limit?: number): Promise<import('@dsh-lab/shared').LabEvent[]> {
+    const n = Math.min(limit ?? 20, 100)
+    const rows = this.db
+      .prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT ?')
+      .all(n) as unknown as import('@dsh-lab/shared').LabEvent[]
+    return Promise.resolve(rows)
+  }
+
   appendEvent(event: { type: LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void> {
     this.db
       .prepare('INSERT INTO events (type, entity_type, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)')

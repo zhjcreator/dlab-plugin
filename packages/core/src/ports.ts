@@ -9,6 +9,7 @@
 import type {
   EnvironmentView,
   GitStatus,
+  LabEvent,
   MergeMode,
   MergeResult,
   RunResourceRequest,
@@ -78,6 +79,7 @@ export interface StorePort {
   reserveGpu(gpuId: number, runId: string): Promise<void>
   releaseGpu(gpuId: number): Promise<void>
 
+  listEvents(limit?: number): Promise<import('@dsh-lab/shared').LabEvent[]>
   appendEvent(event: { type: import('@dsh-lab/shared').LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void>
 
   transaction<T>(fn: () => Promise<T>): Promise<T>

@@ -214,6 +214,8 @@ export interface SolutionView {
   dirty?: boolean
   parentSlug?: string
   mergedIntoSlug?: string
+  hypothesis?: string
+  conclusion?: string
   runCount: number
   bestSummary?: Record<string, number>
   lastRunAt?: number

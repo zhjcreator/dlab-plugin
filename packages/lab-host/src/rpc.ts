@@ -39,6 +39,8 @@ type Endpoint =
   | 'runs.stop'
   | 'resources.get'
   | 'environment.get'
+  | 'graph.get'
+  | 'events.list'
 
 /** Single-switch dispatch over every /dlab endpoint. Never throws. */
 export async function dispatch(
@@ -147,6 +149,12 @@ export async function dispatch(
 
       case 'environment.get':
         return ok(await service.environment.get())
+
+      case 'graph.get':
+        return ok(await service.graph.get())
+
+      case 'events.list':
+        return ok(await service.events.list(typeof p.limit === 'number' ? p.limit : 20))
 
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)

@@ -1,21 +1,15 @@
 /**
- * @dsh-lab/client — read-only research dashboard.
+ * @dsh-lab/client — Research Evolution Graph (read-only dashboard).
  *
- * Design philosophy: the UI is a VIEW, not a controller. All operations
- * (fork, merge, archive, run) go through the agent's lab_* tools. The panel
- * visualizes the research graph, recent runs, and tells the agent what
- * commands are available.
+ * NOT a Git commit graph. This is a research decision graph:
+ * hypothesis → modification → experiment → conclusion → merge to mainline.
  *
- * Mounting (DESIGN §26.1):
- *   dsh-better-sidebar present → "DLab" tab in the right sidebar
- *   absent → 🔬 header button opens a fixed overlay
+ * Layout: Main milestones on a horizontal line (the research baseline
+ * evolution). Experiments branch above/below with fork/merge edges.
+ * Delta metrics compare each experiment to its fork parent.
  *
- * Workspace detection: the button only renders when the current session's
- * workspace matches the lab root (via slot-injected sessionId →
- * ctx.sessions.binding/scope → cwd comparison with RPC project.get root).
- *
- * Theme: uses --dsw-alias-* tokens with hardcoded fallbacks; no color-mix()
- * (browser compat); every state renders something (no blank boxes).
+ * All operations (fork, run, merge, archive) are agent-only via lab_* tools.
+ * This UI is 100% read-only observation.
  */
 
 /* eslint-disable */
@@ -31,100 +25,37 @@ window.__ModuleLoader__.load({
 		var h = React.createElement;
 		var useState = React.useState;
 		var useEffect = React.useEffect;
-		var useCallback = React.useCallback;
+		var useCallback = React.useMemo;
 		var useMemo = React.useMemo;
 		var createPortal = require('react-dom').createPortal;
 
 		var RPC = '/dsh-lab';
-		var POLL_MS = 5000;
+		var POLL_MS = 8000;
 
-		// ── theme (hardcoded fallbacks, no color-mix for compat) ─────────────
 		var C = {
-			bg:     'var(--dsw-alias-bg-base, #f8f9fa)',
-			card:   'var(--dsw-alias-bg-layer-1, #ffffff)',
-			nested: 'var(--dsw-alias-bg-layer-2, #f1f3f5)',
-			overlay:'var(--dsw-alias-bg-overlay, #ffffff)',
-			bd:     'var(--dsw-alias-border-l1, #e0e0e0)',
-			bd2:    'var(--dsw-alias-border-l2, #ccc)',
-			brand:  'var(--dsw-alias-brand-primary, #2563eb)',
-			tx:     'var(--dsw-alias-label-primary, #1a1a2e)',
-			tx2:    'var(--dsw-alias-label-secondary, #6b7280)',
-			red:    'var(--dsw-alias-state-error-primary, #dc2626)',
-			green:  'var(--dsw-alias-state-success-primary, #16a34a)',
-			yellow: 'var(--dsw-alias-state-warn-primary, #d97706)',
-			blue:   '#3b82f6',
+			bg: 'var(--dsw-alias-bg-base, #f8f9fa)',
+			card: 'var(--dsw-alias-bg-layer-1, #fff)',
+			nested: 'var(--dsw-alias-bg-layer-2, #f0f1f3)',
+			overlay: 'var(--dsw-alias-bg-overlay, #fff)',
+			bd: 'var(--dsw-alias-border-l1, #e0e0e0)',
+			bd2: 'var(--dsw-alias-border-l2, #c0c0c0)',
+			brand: 'var(--dsw-alias-brand-primary, #2563eb)',
+			tx: 'var(--dsw-alias-label-primary, #1a1a2e)',
+			tx2: 'var(--dsw-alias-label-secondary, #667)',
+			red: 'var(--dsw-alias-state-error-primary, #d33)',
+			green: 'var(--dsw-alias-state-success-primary, #2a2)',
+			yellow: 'var(--dsw-alias-state-warn-primary, #d70)',
+			blue: '#48f',
 		};
-
-		// ── helpers ──────────────────────────────────────────────────────────
-
-		function fmtDur(ms) {
-			if (ms == null) return '';
-			var s = Math.floor(ms / 1000);
-			if (s < 60) return s + 's';
-			var m = Math.floor(s / 60);
-			if (m < 60) return m + 'm' + (s % 60) + 's';
-			return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
-		}
-
-		function short(s, n) {
-			if (!s) return '';
-			return s.length > n ? s.slice(0, n) + '…' : s;
-		}
-
-		// ── status visual vocabulary ─────────────────────────────────────────
-
-		var SOL_ST = {
-			active:   { dot: '●', color: C.green,  label: 'Active' },
-			archived: { dot: '○', color: C.tx2,    label: 'Archived' },
-			merged:   { dot: '✓', color: C.brand,  label: 'Merged' },
-			broken:   { dot: '⚠', color: C.red,    label: 'Broken' },
-		};
-		var RUN_ST = {
-			running:   { dot: '◐', color: C.blue,   label: 'Running' },
-			queued:    { dot: '·', color: C.tx2,    label: 'Queued' },
-			starting:  { dot: '◐', color: C.blue,   label: 'Starting' },
-			succeeded: { dot: '✓', color: C.green,  label: 'OK' },
-			failed:    { dot: '✕', color: C.red,    label: 'Failed' },
-			canceled:  { dot: '⊘', color: C.yellow, label: 'Canceled' },
-			lost:      { dot: '?', color: C.tx2,    label: 'Lost' },
-		};
-
-		function Tag(props) {
-			var s = props.st || {};
-			return h('span', {
-				style: {
-					display: 'inline-flex', alignItems: 'center', gap: '2px',
-					fontSize: '9px', fontWeight: 600, lineHeight: '1.4',
-					padding: '1px 6px', borderRadius: '999px',
-					color: s.color || C.tx2,
-					background: 'rgba(127,127,127,0.1)',
-					border: '1px solid rgba(127,127,127,0.2)',
-					whiteSpace: 'nowrap', flexShrink: 0,
-				},
-			}, (s.dot || '·') + ' ' + (s.label || '?'));
-		}
-
-		function MetricBadge(props) {
-			return h('span', {
-				style: {
-					fontSize: '9px', fontWeight: 600,
-					fontFamily: 'ui-monospace,monospace',
-					padding: '1px 5px', borderRadius: '4px',
-					background: 'rgba(127,127,127,0.08)',
-					border: '1px solid rgba(127,127,127,0.15)',
-					color: C.tx, whiteSpace: 'nowrap',
-				},
-			}, props.name, ' ', props.value);
-		}
 
 		// ── RPC hook ─────────────────────────────────────────────────────────
 
 		function useRpc(ctx) {
 			return useMemo(function () {
 				var rpc = ctx && ctx.connection && ctx.connection.rpc;
-				return function (ep, payload) {
+				return function (ep, p) {
 					if (!rpc) return Promise.resolve({ ok: false, error: { message: 'No connection' } });
-					return rpc.call(RPC, ep, payload || {}).then(
+					return rpc.call(RPC, ep, p || {}).then(
 						function (r) { return r && r.ok ? r : { ok: false, error: (r && r.error) || { message: 'RPC failed' } }; },
 						function (e) { return { ok: false, error: { message: String((e && e.message) || e) } }; },
 					);
@@ -134,255 +65,357 @@ window.__ModuleLoader__.load({
 
 		// ── workspace detection ──────────────────────────────────────────────
 
-		/**
-		 * Determine whether the current session's workspace matches the lab
-		 * root. Tries session binding → session scope → fallback show.
-		 */
-		function useWorkspaceMatch(ctx, sessionId, call) {
-			var st = useState(null); // null=checking, true=match, false=mismatch
+		function useWsMatch(ctx, sessionId, call) {
+			var st = useState(null);
 			var set = st[1];
 			st = st[0];
-
 			useEffect(function () {
-				if (!call) return;
 				call('project.get').then(function (res) {
 					if (!res.ok) { set(false); return; }
-					var labRoot = res.value.root;
-					if (!labRoot) { set(true); return; }
-
+					var root = res.value.root;
+					if (!root) { set(true); return; }
 					var cwd = null;
-					// Method 1: session binding → workspace path
-					try {
-						if (sessionId && ctx.sessions && ctx.sessions.binding) {
-							var b = ctx.sessions.binding(sessionId);
-							if (b) {
-								if (b.cwd) cwd = b.cwd;
-								else if (b.workspacePath) cwd = b.workspacePath;
-								else if (b.workspace && b.workspace.path) cwd = b.workspace.path;
-							}
-						}
-					} catch (e) { /* try next */ }
-					// Method 2: session scope → header.cwd
-					if (!cwd) {
+					var sessions = ctx && ctx.get ? ctx.get('sessions') : undefined;
+					if (sessions) {
 						try {
-							if (sessionId && ctx.sessions && ctx.sessions.scope) {
-								var sc = ctx.sessions.scope(sessionId);
-								if (sc) {
-									if (sc.header && sc.header.cwd) cwd = sc.header.cwd;
-									else if (sc.session && sc.session.header && sc.session.header.cwd) cwd = sc.session.header.cwd;
-								}
-							}
-						} catch (e) { /* fallback */ }
+							var b = sessions.binding(sessionId);
+							if (b && b.cwd) cwd = b.cwd;
+						} catch (e) {}
+						if (!cwd) {
+							try {
+								var sc = sessions.scope(sessionId);
+								if (sc && sc.header && sc.header.cwd) cwd = sc.header.cwd;
+							} catch (e) {}
+						}
 					}
-
-					if (!cwd) { set(true); return; } // can't determine → show
-					// match if cwd is the lab root or inside it
-					set(cwd === labRoot || cwd.startsWith(labRoot + '/'));
+					if (!cwd) { set(true); return; }
+					set(cwd === root || cwd.startsWith(root + '/'));
 				});
 			}, [call, sessionId]);
-
 			return st;
 		}
 
-		// ── research graph (the core visualization) ─────────────────────────
+		// ── graph layout (pure computation, no React) ────────────────────────
 
 		/**
-		 * Build a git-log-style tree from solution parent/merge relations.
+		 * Compute x/y positions for the evolution graph.
+		 * Main milestones: horizontal line at y=0.
+		 * Experiments: lanes above (y<0) or below (y>0).
 		 */
-		function buildTree(solutions, runs) {
-			var byId = {};
-			solutions.forEach(function (s) { byId[s.id] = s; });
+		function layoutGraph(data) {
+			if (!data || !data.milestones || data.milestones.length === 0) return null;
 
-			var runsBySol = {};
-			runs.forEach(function (r) {
-				if (!runsBySol[r.solutionId]) runsBySol[r.solutionId] = [];
-				runsBySol[r.solutionId].push(r);
+			var MS_GAP = 160; // px between milestones
+			var LANE_H = 55;  // px between experiment lanes
+			var ms = data.milestones;
+			var nodes = data.nodes || [];
+			var edges = data.edges || [];
+
+			// milestone positions
+			var msPos = {};
+			ms.forEach(function (m, i) {
+				msPos[m.id] = { x: 60 + i * MS_GAP, y: 0, type: 'milestone', data: m };
 			});
 
-			var bestMetric = {};
-			solutions.forEach(function (s) {
-				var rs = (runsBySol[s.id] || []).filter(function (r) { return r.status === 'succeeded'; });
-				if (rs.length > 0 && rs[0].summaryMetrics) {
-					var entries = Object.entries(rs[0].summaryMetrics);
-					if (entries.length > 0) bestMetric[s.id] = { name: entries[0][0], value: entries[0][1] };
+			// experiment nodes: group by their fork milestone
+			var expByMs = {};
+			nodes.forEach(function (n) {
+				if (n.role === 'main') return;
+				var forkFrom = n.parent || 'main';
+				// find which milestone this forks from (use the milestone that
+				// existed at fork time — approximate with parent's merge target
+				// or 'v1' if parent is main)
+				var msId = 'v1';
+				if (forkFrom !== 'main') {
+					// find the milestone that this experiment's parent merged into
+					var parentNode = nodes.find(function (x) { return x.id === forkFrom; });
+					if (parentNode && parentNode.mergedInto) {
+						// the parent merged into main, so this forks from the milestone
+						// AFTER that merge
+						var mileIdx = ms.findIndex(function (m) { return m.source === forkFrom; });
+						msId = mileIdx >= 0 ? ms[mileIdx].id : 'v1';
+					}
 				}
+				if (!expByMs[msId]) expByMs[msId] = [];
+				expByMs[msId].push(n);
 			});
 
-			function meta(s) {
-				return {
-					sol: s,
-					metric: bestMetric[s.id],
-					runCount: (runsBySol[s.id] || []).length,
-					lastRun: (runsBySol[s.id] || [])[0],
-				};
-			}
-
-			var main = solutions.find(function (s) { return s.role === 'main'; });
-			if (!main) return [];
-
-			var byParent = {};
-			solutions.forEach(function (s) {
-				if (s.role === 'main') return;
-				var parentSlug = s.parentSlug || 'main';
-				if (!byParent[parentSlug]) byParent[parentSlug] = [];
-				byParent[parentSlug].push(s);
+			// assign lanes (alternate above/below)
+			var nodePos = {};
+			Object.keys(expByMs).forEach(function (msId) {
+				var exps = expByMs[msId];
+				var base = msPos[msId] || msPos['v1'];
+				if (!base) return;
+				exps.forEach(function (exp, i) {
+					var lane = Math.floor(i / 2) + 1;
+					var side = i % 2 === 0 ? -1 : 1; // above / below
+					var x = base.x + MS_GAP * 0.5; // between milestones
+					// If merged, position between fork and merge milestones
+					if (exp.mergedInto) {
+						var mergeMs = ms.find(function (m) { return m.source === exp.id; });
+						if (mergeMs && msPos[mergeMs.id]) {
+							x = (base.x + msPos[mergeMs.id].x) / 2;
+						}
+					}
+					nodePos[exp.id] = {
+						x: x, y: side * lane * LANE_H,
+						type: 'experiment', data: exp,
+					};
+				});
 			});
 
-			var rows = [];
-			function walk(slug, prefix, depth) {
-				var children = (byParent[slug] || []).slice().sort(function (a, b) {
-					var rank = function (s) { return s.status === 'active' ? 0 : s.status === 'merged' ? 1 : 2; };
-					return rank(a) - rank(b);
-				});
-				children.forEach(function (child, i) {
-					var isLast = i === children.length - 1;
-					rows.push(Object.assign(meta(child), {
-						prefix: prefix + (isLast ? '\u2514\u2500 ' : '\u251C\u2500 '),
-						depth: depth,
-						isLast: isLast,
-					}));
-					walk(child.slug, prefix + (isLast ? '   ' : '\u2502  '), depth + 1);
-				});
-			}
+			// compute SVG bounds
+			var allPos = Object.values(nodePos).concat(Object.values(msPos));
+			var minX = Math.min.apply(null, allPos.map(function (p) { return p.x; })) - 60;
+			var maxX = Math.max.apply(null, allPos.map(function (p) { return p.x; })) + 60;
+			var minY = Math.min.apply(null, allPos.map(function (p) { return p.y; })) - 40;
+			var maxY = Math.max.apply(null, allPos.map(function (p) { return p.y; })) + 40;
 
-			var rootRow = Object.assign(meta(main), { prefix: '', depth: 0, isMain: true });
-			walk('main', '', 1);
-			return [rootRow].concat(rows);
+			return { msPos: msPos, nodePos: nodePos, bounds: { minX: minX, maxX: maxX, minY: minY, maxY: maxY }, edges: edges };
 		}
 
-		function TreeView(props) {
-			var rows = props.rows;
-			if (rows.length === 0) {
-				return h('div', { style: { padding: '20px', textAlign: 'center', color: C.tx2, fontSize: '11px' } },
-					'No solutions — ask the agent to initialize the lab');
+		// ── SVG graph renderer ───────────────────────────────────────────────
+
+		function GraphSVG(props) {
+			var layout = props.layout;
+			var selected = props.selected;
+			var onSelect = props.onSelect;
+			if (!layout) return null;
+
+			var b = layout.bounds;
+			var w = b.maxX - b.minX;
+			var ht = b.maxY - b.minY;
+			var midY = -b.minY; // y=0 in SVG coords
+
+			var ns = 'http://www.w3.org/2000/svg';
+
+			function nodeColor(d) {
+				if (d.type === 'milestone') return C.brand;
+				var s = d.data.status;
+				if (s === 'merged') return C.green;
+				if (s === 'active') return C.blue;
+				if (s === 'archived') return C.tx2;
+				if (s === 'broken') return C.red;
+				return C.tx2;
 			}
-			return h('div', { style: { padding: '8px 6px' } },
-				rows.map(function (row) {
-					return h(TreeRow, { key: row.sol.id, row: row });
-				}));
-		}
 
-		function TreeRow(props) {
-			var row = props.row;
-			var s = row.sol;
-			var st = SOL_ST[s.status] || SOL_ST.active;
-			var isMain = row.isMain;
+			function edgeColor(e) {
+				if (e.type === 'merge') return C.green;
+				if (e.type === 'fork') return C.bd2;
+				return C.bd;
+			}
 
-			return h('div', {
-				style: {
-					fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
-					fontSize: '11px', lineHeight: '1.8',
-					padding: '0 4px',
-					whiteSpace: 'pre',
-					color: C.tx,
-				},
+			return h('svg', {
+				xmlns: ns,
+				viewBox: b.minX + ' ' + b.minY + ' ' + w + ' ' + ht,
+				style: { width: '100%', minHeight: '160px', display: 'block' },
 			},
-				h('span', { style: { color: C.bd2 } }, row.prefix),
-				h('span', {
-					style: { color: st.color, fontWeight: 700, marginRight: '4px', fontSize: isMain ? '13px' : '11px' },
-				}, isMain ? '\u2605' : st.dot),
-				h('span', {
-					style: { fontWeight: 600, color: C.tx, fontFamily: isMain ? 'inherit' : 'ui-monospace,monospace' },
-				}, s.name || s.slug),
+				// main line
+				h('line', {
+					x1: b.minX + 20, y1: 0, x2: b.maxX - 20, y2: 0,
+					stroke: C.brand, strokeWidth: 2, opacity: 0.3,
+				}),
 
-				'  ',
-				h(Tag, { st: st }),
+				// edges
+				layout.edges.map(function (e, i) {
+					var from = layout.msPos[e.from] || layout.nodePos[e.from];
+					var to = layout.msPos[e.to] || layout.nodePos[e.to];
+					if (!from || !to) return null;
+					var isMerge = e.type === 'merge';
+					var isRunning = to.data && to.data.status === 'running';
+					return h('path', {
+						key: 'e' + i,
+						d: 'M' + from.x + ',' + from.y + ' C' + from.x + ',' + (from.y + to.y) / 2 + ' ' + to.x + ',' + (from.y + to.y) / 2 + ' ' + to.x + ',' + to.y,
+						fill: 'none',
+						stroke: edgeColor(e),
+						strokeWidth: isMerge ? 1.5 : 1,
+						strokeDasharray: isRunning ? '4,3' : undefined,
+						opacity: 0.6,
+					});
+				}),
 
-				row.metric ? h('span', { style: { marginLeft: '6px' } },
-					h(MetricBadge, { name: row.metric.name, value: typeof row.metric.value === 'number' ? row.metric.value.toFixed(3) : row.metric.value })) : null,
-
-				row.runCount > 0 ? h('span', { style: { marginLeft: '6px', fontSize: '9px', color: C.tx2 } },
-					row.runCount + ' run' + (row.runCount > 1 ? 's' : '')) : null,
-
-				s.dirty ? h('span', { style: { marginLeft: '4px', fontSize: '9px', color: C.yellow } }, '\u270e') : null,
-
-				s.hypothesis ? h('div', {
-					style: {
-						fontSize: '9px', color: C.tx2, lineHeight: 1.4,
-						paddingLeft: (row.prefix.length * 6 + 24) + 'px',
-						fontStyle: 'italic', fontFamily: 'inherit', whiteSpace: 'normal',
+				// milestone nodes
+				Object.entries(layout.msPos).map(function (pair) {
+					var id = pair[0], p = pair[1];
+					var isSel = selected === id;
+					var d = p.data;
+					return h('g', {
+						key: id,
+						onClick: function () { onSelect(id, 'milestone', d); },
+						style: { cursor: 'pointer' },
 					},
-				}, '\u2753 ', short(s.hypothesis, 70)) : null,
+						h('circle', {
+							cx: p.x, cy: p.y, r: isSel ? 7 : 5,
+							fill: C.brand, stroke: isSel ? C.brand : 'none', strokeWidth: 2,
+						}),
+						h('text', {
+							x: p.x, y: p.y - 12,
+							textAnchor: 'middle', fontSize: 10, fontWeight: 700,
+							fill: C.brand, fontFamily: 'inherit',
+						}, d.label),
+						d.metric !== undefined ? h('text', {
+							x: p.x, y: p.y + 18,
+							textAnchor: 'middle', fontSize: 8,
+							fill: C.tx2, fontFamily: 'ui-monospace,monospace',
+						}, d.metric !== null && d.metric !== undefined ? d.metric.toFixed(3) : '—') : null);
+				}),
 
-				s.conclusion ? h('div', {
-					style: {
-						fontSize: '9px', color: C.green, lineHeight: 1.4,
-						paddingLeft: (row.prefix.length * 6 + 24) + 'px',
-						fontFamily: 'inherit', whiteSpace: 'normal',
+				// experiment nodes
+				Object.entries(layout.nodePos).map(function (pair) {
+					var id = pair[0], p = pair[1];
+					var isSel = selected === id;
+					var d = p.data;
+					var col = nodeColor(p);
+					var isRunning = d.status === 'running' || d.lastRunAt && d.lastRunAt > Date.now() - 60000;
+					var r = d.status === 'merged' ? 5 : 6;
+					return h('g', {
+						key: id,
+						onClick: function () { onSelect(id, 'experiment', d); },
+						style: { cursor: 'pointer' },
 					},
-				}, '\uD83D\uDCA1 ', short(s.conclusion, 70)) : null,
+						h('circle', {
+							cx: p.x, cy: p.y, r: isSel ? r + 2 : r,
+							fill: col,
+							stroke: isSel ? C.brand : 'none', strokeWidth: 2,
+							opacity: d.status === 'archived' ? 0.4 : 1,
+						}),
+						// running pulse ring
+						isRunning ? h('circle', {
+							cx: p.x, cy: p.y, r: r + 4,
+							fill: 'none', stroke: C.blue, strokeWidth: 1,
+							strokeDasharray: '2,3',
+						}) : null,
+						// label
+						h('text', {
+							x: p.x, y: p.y + (p.y < 0 ? -12 : 20),
+							textAnchor: 'middle', fontSize: 9, fontWeight: 600,
+							fill: C.tx, fontFamily: 'ui-monospace,monospace',
+						}, short(d.label, 14)),
+						// delta
+						d.delta !== undefined && d.delta !== null ? h('text', {
+							x: p.x, y: p.y + (p.y < 0 ? -22 : 30),
+							textAnchor: 'middle', fontSize: 8, fontWeight: 600,
+							fill: d.delta >= 0 ? C.green : C.red,
+							fontFamily: 'ui-monospace,monospace',
+						}, (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)) : null,
+						// status icon
+						d.status === 'merged' ? h('text', {
+							x: p.x + 10, y: p.y - 4, fontSize: 8,
+							fill: C.green,
+						}, '✓') : null,
+						d.status === 'archived' ? h('text', {
+							x: p.x + 10, y: p.y - 4, fontSize: 8,
+							fill: C.tx2,
+						}, '×') : null);
+				}),
 			);
 		}
 
-				// ── runs list (compact) ──────────────────────────────────────────────
+		function short(s, n) {
+			if (!s) return '';
+			return s.length > n ? s.slice(0, n) + '…' : s;
+		}
 
-		function RunsList(props) {
-			var runs = props.runs;
-			if (runs.length === 0) {
-				return h('div', { style: { padding: '8px 18px', fontSize: '10px', color: C.tx2, fontStyle: 'italic' } },
-					'No runs yet');
-			}
-			return h('div', { style: { padding: '4px 8px' } },
-				runs.slice(0, 10).map(function (r) {
-					var st = RUN_ST[r.status] || RUN_ST.lost;
-					var metrics = r.summaryMetrics || {};
-					var mEntries = Object.entries(metrics).slice(0, 2);
-					return h('div', {
-						key: r.id,
+		// ── Inspector (click a node → detail) ────────────────────────────────
+
+		function Inspector(props) {
+			var sel = props.selected;
+			if (!sel) return null;
+			var d = sel.data;
+			var isMs = sel.type === 'milestone';
+
+			return h('div', {
+				style: {
+					padding: '10px 12px', background: C.nested,
+					borderTop: '1px solid ' + C.bd, flexShrink: 0,
+					fontSize: '11px', lineHeight: 1.5,
+				},
+			},
+				// title row
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' } },
+					h('span', { style: { fontWeight: 700, fontSize: '13px', color: C.tx } }, d.label || d.id),
+					h('span', {
 						style: {
-							display: 'flex', alignItems: 'center', gap: '6px',
-							padding: '3px 8px', fontSize: '10px',
-							borderBottom: '1px solid rgba(127,127,127,0.06)',
+							fontSize: '9px', fontWeight: 600, padding: '1px 6px', borderRadius: '999px',
+							color: isMs ? C.brand : d.status === 'merged' ? C.green : d.status === 'active' ? C.blue : C.tx2,
+							background: 'rgba(127,127,127,0.1)',
 						},
+					}, isMs ? 'Milestone' : (d.status || ''))),
+
+				// hypothesis
+				!isMs && d.hypothesis ? h('div', { style: { marginBottom: '4px' } },
+					h('span', { style: { fontSize: '9px', fontWeight: 700, color: C.tx2, textTransform: 'uppercase' } }, 'Hypothesis '),
+					h('span', { style: { fontStyle: 'italic', color: C.tx2 } }, short(d.hypothesis, 100))) : null,
+
+				// conclusion
+				!isMs && d.conclusion ? h('div', { style: { marginBottom: '4px' } },
+					h('span', { style: { fontSize: '9px', fontWeight: 700, color: C.tx2, textTransform: 'uppercase' } }, 'Conclusion '),
+					h('span', { style: { color: C.green } }, short(d.conclusion, 100))) : null,
+
+				// metric + delta
+				h('div', { style: { fontFamily: 'ui-monospace,monospace', fontSize: '10px', marginBottom: '4px' } },
+					h('span', { style: { color: C.tx2 } }, 'metric  '),
+					h('span', { style: { fontWeight: 700, color: C.tx } },
+						d.metric !== undefined && d.metric !== null ? d.metric.toFixed(3) : '—'),
+					d.delta !== undefined && d.delta !== null ? h('span', {
+						style: { color: d.delta >= 0 ? C.green : C.red, fontWeight: 600, marginLeft: '6px' },
+					}, (d.delta >= 0 ? '↑' : '↓') + ' ' + Math.abs(d.delta).toFixed(3)) : null),
+
+				// git info
+				!isMs ? h('div', { style: { fontFamily: 'ui-monospace,monospace', fontSize: '9px', color: C.tx2 } },
+					d.branch, ' @ ', String(d.headCommit || '').slice(0, 8),
+					d.runCount ? ' · ' + d.runCount + ' runs' : '') : null,
+
+				h('div', {
+					style: { fontSize: '9px', color: C.tx2, marginTop: '4px', fontStyle: 'italic' },
+				}, 'All operations via agent — no buttons here.'));
+		}
+
+		// ── Activity feed ────────────────────────────────────────────────────
+
+		function Activity(props) {
+			var events = props.events || [];
+			if (events.length === 0) return null;
+			return h('div', { style: { padding: '4px 12px 8px' } },
+				h('div', {
+					style: { fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.tx2, marginBottom: '4px' },
+				}, 'Activity'),
+				events.slice(0, 8).map(function (e, i) {
+					return h('div', {
+						key: i,
+						style: { fontSize: '10px', color: C.tx2, lineHeight: 1.6, display: 'flex', gap: '8px' },
 					},
-						h('span', { style: { color: st.color, fontWeight: 700, fontSize: '10px', width: '14px', textAlign: 'center' } }, st.dot),
-						h('span', { style: { fontWeight: 600, color: C.tx, fontFamily: 'ui-monospace,monospace', fontSize: '10px' } },
-							'#' + r.id.replace(/^run-/, '')),
-						h('span', { style: { color: C.tx2, fontSize: '10px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-							r.solutionSlug || ''),
-						r.durationMs != null ? h('span', { style: { color: C.tx2, fontSize: '9px' } }, fmtDur(r.durationMs)) : null,
-						r.exitCode != null ? h('span', { style: { color: r.exitCode === 0 ? C.green : C.red, fontSize: '9px' } },
-							'exit ' + r.exitCode) : null,
-						mEntries.map(function (e) {
-							return h(MetricBadge, { key: e[0], name: e[0], value: typeof e[1] === 'number' ? e[1].toFixed(3) : e[1] });
-						}),
-					);
+						h('span', {
+							style: { fontFamily: 'ui-monospace,monospace', fontSize: '9px', color: C.tx2, flexShrink: 0 },
+						}, fmtTime(e.time)),
+						h('span', { style: { color: C.tx } }, e.text || e.type));
 				}));
 		}
 
-		// ── agent commands reference ─────────────────────────────────────────
+		function fmtTime(ts) {
+			if (!ts) return '';
+			var d = new Date(ts);
+			return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+		}
 
-		var AGENT_HELP = [
-			['lab_fork_solution', '"从 main fork 一个新实验叫 lr-sweep"'],
-			['lab_checkpoint_solution', '"checkpoint 当前方案的修改"'],
-			['lab_merge_solution', '"把 lr-sweep 合并到 main"'],
-			['lab_archive_solution', '"归档 query32，结论是没效果"'],
-			['lab_start_run', '"在 agm-cosine 上跑 train.py"'],
-			['lab_stop_run', '"停掉 run-000003"'],
-			['lab_list_solutions', '"列出所有方案"'],
-			['lab_solution_diff', '"对比 agm-cosine 和 main"'],
-		];
-
-		// ── main panel (read-only dashboard) ─────────────────────────────────
+		// ── Main panel ───────────────────────────────────────────────────────
 
 		function LabPanel(props) {
 			var ctx = props.ctx;
 			var call = useRpc(ctx);
 
-			var st = useState({ loading: true, error: null, data: null });
+			var st = useState({ loading: true, error: null, graph: null });
 			var set = st[1];
 			st = st[0];
 
-			var helpState = useState(false);
-			var setHelp = helpState[1];
-			helpState = helpState[0];
-			var help = helpState;
+			var selState = useState(null);
+			var setSel = selState[1];
+			selState = selState[0];
 
 			var refresh = useCallback(function () {
-				Promise.all([call('project.get'), call('solutions.list'), call('runs.list')]).then(function (rs) {
-					var bad = rs.find(function (r) { return !r.ok; });
-					if (bad) { set({ loading: false, error: bad.error.message, data: null }); return; }
-					set({ loading: false, error: null, data: { project: rs[0].value, solutions: rs[1].value.solutions || [], runs: rs[2].value.runs || [] } });
+				call('graph.get').then(function (res) {
+					if (!res.ok) { set({ loading: false, error: res.error.message, graph: null }); return; }
+					set({ loading: false, error: null, graph: res.value });
 				});
 			}, [call]);
 
@@ -392,32 +425,25 @@ window.__ModuleLoader__.load({
 				return function () { clearInterval(t); };
 			}, [refresh]);
 
-			// spinner keyframes
-			useEffect(function () {
-				var el = document.createElement('style');
-				el.textContent = '@keyframes dshlab-rot{to{transform:rotate(360deg)}}';
-				document.head.appendChild(el);
-				return function () { try { document.head.removeChild(el); } catch (e) {} };
-			}, []);
-
 			if (st.loading) {
-				return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '8px', color: C.tx2, fontSize: '12px' } },
-					h('span', { style: { width: '14px', height: '14px', borderRadius: '50%', border: '2px solid ' + C.bd, borderTopColor: C.brand, animation: 'dshlab-rot .8s linear infinite' } }),
-					'Loading…');
+				return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.tx2, fontSize: '12px' } },
+					'Loading research graph…');
 			}
-
 			if (st.error) {
-				var uninit = /initialized|no lab state/i.test(st.error);
 				return h('div', { style: { padding: '16px', fontSize: '11px' } },
-					h('div', { style: { padding: '10px', borderRadius: '8px', background: 'rgba(220,38,38,0.05)', border: '1px solid rgba(220,38,38,0.15)', color: C.tx } },
-						h('div', { style: { fontWeight: 600, color: C.red, marginBottom: '4px' } }, '⚠ ', uninit ? 'Lab not initialized' : 'Connection error'),
+					h('div', { style: { padding: '10px', borderRadius: '8px', background: 'rgba(220,38,38,0.05)', border: '1px solid rgba(220,38,38,0.15)' } },
+						h('div', { style: { fontWeight: 600, color: C.red, marginBottom: '4px' } }, '⚠ ', /initialized/i.test(st.error) ? 'Lab not initialized' : 'Error'),
 						h('div', { style: { color: C.tx2, fontSize: '10px' } }, st.error)));
 			}
 
-			var d = st.data;
-			var tree = buildTree(d.solutions, d.runs);
-			var activeCount = d.solutions.filter(function (s) { return s.status === 'active'; }).length;
-			var runningCount = d.runs.filter(function (r) { return r.status === 'running' || r.status === 'starting'; }).length;
+			var g = st.graph;
+			var layout = layoutGraph(g);
+			var nodeCount = (g.nodes || []).length;
+			var runningCount = (g.nodes || []).filter(function (n) { return n.status === 'running' || (n.lastRunAt && n.lastRunAt > Date.now() - 60000); }).length;
+
+			function onSelect(id, type, data) {
+				setSel(selState && selState.id === id ? null : { id: id, type: type, data: data });
+			}
 
 			return h('div', {
 				style: {
@@ -435,61 +461,24 @@ window.__ModuleLoader__.load({
 				},
 					h('span', { style: { fontSize: '15px' } }, '🔬'),
 					h('div', { style: { flex: 1, minWidth: 0 } },
-						h('div', { style: { fontWeight: 700, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-							d.project.name || 'DLab'),
+						h('div', { style: { fontWeight: 700, fontSize: '13px' } }, 'Research Evolution'),
 						h('div', { style: { fontSize: '10px', color: C.tx2 } },
-						activeCount, ' solutions · ', d.runs.length, ' runs',
-						runningCount > 0 ? ' · ' + runningCount + ' running' : ''),
+							nodeCount, ' solutions',
+							runningCount > 0 ? ' · ' + runningCount + ' running' : ''),
 					),
-					h('button', {
-						style: {
-							font: 'inherit', fontSize: '11px', fontWeight: 700,
-							width: '20px', height: '20px', borderRadius: '50%',
-							background: 'rgba(127,127,127,0.12)',
-							border: 'none', color: C.tx2, cursor: 'pointer',
-							display: 'flex', alignItems: 'center', justifyContent: 'center',
-							flexShrink: 0,
-						},
-						onClick: function () { setHelp(!help); },
-						title: 'Agent commands help',
-					}, '?'),
 				),
 
-				// help overlay (toggleable)
-				help ? h('div', {
-					style: {
-						padding: '10px 12px', background: C.nested,
-						borderBottom: '1px solid ' + C.bd, flexShrink: 0,
-					},
-				},
-					h('div', {
-						style: { fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.tx2, marginBottom: '5px' },
-					}, '\uD83E\uDD16 Agent commands — tell the agent:'),
-					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
-						AGENT_HELP.map(function (cmd) {
-							return h('div', {
-								key: cmd[0],
-								style: { fontSize: '10px', color: C.tx, lineHeight: 1.5, display: 'flex', gap: '6px' },
-							},
-								h('span', { style: { fontFamily: 'ui-monospace,monospace', fontSize: '9px', color: C.brand, fontWeight: 600, minWidth: '140px' } }, cmd[0]),
-								h('span', { style: { color: C.tx2 } }, cmd[1]));
-						})),
-					h('div', {
-						style: { fontSize: '9px', color: C.tx2, marginTop: '6px', fontStyle: 'italic' },
-					}, 'All operations are performed by the agent during conversation.'),
-				) : null,
+				// graph (scrollable SVG)
+				h('div', { style: { flex: 1, minHeight: 120, overflowX: 'auto', overflowY: 'hidden', padding: '8px 0' } },
+					layout ? h(GraphSVG, { layout: layout, selected: selState ? selState.id : null, onSelect: onSelect }) :
+					h('div', { style: { padding: '20px', textAlign: 'center', color: C.tx2, fontSize: '11px' } },
+						'No solutions — ask the agent to initialize')),
 
-				// content (scrollable)
-				h('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto' } },
-					h(TreeView, { rows: tree }),
+				// inspector
+				h(Inspector, { selected: selState }),
 
-					// runs section
-					h('div', {
-						style: { fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.tx2, padding: '10px 12px 4px', borderTop: '1px solid ' + C.bd, marginTop: '4px' },
-					}, 'Recent Runs'),
-					h(RunsList, { runs: d.runs }),
-				),
-
+				// activity
+				h(Activity, { events: g.activity || [] }),
 			);
 		}
 
@@ -499,23 +488,17 @@ window.__ModuleLoader__.load({
 			var ctx = props.ctx;
 			var sessionId = props.sessionId;
 			var call = useRpc(ctx);
-
 			var openState = useState(false);
 			var setOpen = openState[1];
 			var open = openState[0];
+			var wsMatch = useWsMatch(ctx, sessionId, call);
 
-			var wsMatch = useWorkspaceMatch(ctx, sessionId, call);
-
-			// hide when workspace doesn't match
 			if (wsMatch === false) return null;
-			if (wsMatch === null && open) return null; // still checking → don't flash
+			if (wsMatch === null && open) return null;
 
 			function toggle() {
 				var bs = ctx && ctx.get ? ctx.get('betterSidebar') : undefined;
-				if (bs && typeof bs.openTab === 'function') {
-					bs.openTab({ type: 'dsh-lab:lab' });
-					return;
-				}
+				if (bs && typeof bs.openTab === 'function') { bs.openTab({ type: 'dsh-lab:lab' }); return; }
 				setOpen(!open);
 			}
 
@@ -528,13 +511,13 @@ window.__ModuleLoader__.load({
 						display: 'flex', alignItems: 'center',
 					},
 					onClick: toggle,
-					title: 'DLab — research solutions & experiments',
+					title: 'DLab — Research Evolution Graph',
 				}, '🔬'),
 				open ? createPortal(
 					h('div', {
 						style: {
 							position: 'fixed', top: '44px', right: '10px', bottom: '10px',
-							width: 'min(400px, calc(100vw - 20px))', zIndex: 999,
+							width: 'min(420px, calc(100vw - 20px))', zIndex: 999,
 							borderRadius: '10px', border: '1px solid ' + C.bd2,
 							background: C.overlay,
 							boxShadow: '0 12px 40px rgba(0,0,0,0.15)',
@@ -559,42 +542,32 @@ window.__ModuleLoader__.load({
 		var inject = ['slots', 'connection'];
 
 		function apply(ctx) {
-			// better-sidebar tab (optional)
 			try {
 				ctx.inject(['betterSidebar'], function (bsCtx) {
 					bsCtx.effect(function () {
 						return bsCtx.betterSidebar.registerTab({
 							id: 'dsh-lab:lab',
 							title: 'DLab',
-							order: 150,
-							single: true,
+							order: 150, single: true,
 							icon: function (size) {
 								return h('span', { style: { fontSize: Math.min(size, 18) + 'px' } }, '🔬');
 							},
-							component: function (tp) {
-								return h(LabPanel, { ctx: tp.ctx });
-							},
+							component: function (tp) { return h(LabPanel, { ctx: tp.ctx }); },
 						});
 					}, 'dsh-lab: tab');
 				});
-			} catch (e) { /* header-button-only mode */ }
+			} catch (e) {}
 
-			// header button (always)
 			var slots = ctx.slots;
 			if (!slots) return;
 			slots.inject('conversation.session.header.actions', function () {
 				return slots.register(
 					{
 						name: 'conversation.session.header.actions',
-						id: 'dsh-lab',
-						order: 30,
-						inject: function (sessionId) {
-							return { ctx: ctx, sessionId: sessionId };
-						},
+						id: 'dsh-lab', order: 30,
+						inject: function (sessionId) { return { ctx: ctx, sessionId: sessionId }; },
 					},
-					function (sp) {
-						return h(LabHeaderButton, { ctx: sp.ctx, sessionId: sp.sessionId });
-					},
+					function (sp) { return h(LabHeaderButton, { ctx: sp.ctx, sessionId: sp.sessionId }); },
 				);
 			});
 		}
