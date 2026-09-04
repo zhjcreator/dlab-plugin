@@ -186,19 +186,19 @@ window.__ModuleLoader__.load({
 
 		// ── research graph (the core visualization) ─────────────────────────
 
-		function buildGraph(solutions, runs) {
-			// index by id for parent lookup
+		/**
+		 * Build a git-log-style tree from solution parent/merge relations.
+		 */
+		function buildTree(solutions, runs) {
 			var byId = {};
 			solutions.forEach(function (s) { byId[s.id] = s; });
 
-			// runs per solution
 			var runsBySol = {};
 			runs.forEach(function (r) {
 				if (!runsBySol[r.solutionId]) runsBySol[r.solutionId] = [];
 				runsBySol[r.solutionId].push(r);
 			});
 
-			// best metric per solution (first succeeded run's metrics)
 			var bestMetric = {};
 			solutions.forEach(function (s) {
 				var rs = (runsBySol[s.id] || []).filter(function (r) { return r.status === 'succeeded'; });
@@ -208,149 +208,113 @@ window.__ModuleLoader__.load({
 				}
 			});
 
-			// build tree: main at root, experiments under parent
-			var main = solutions.find(function (s) { return s.role === 'main'; });
-			if (!main) return { root: null, children: [] };
-
-			var children = solutions
-				.filter(function (s) { return s.role !== 'main'; })
-				.map(function (s) {
-					return {
-						sol: s,
-						depth: 1,
-						metric: bestMetric[s.id],
-						runCount: (runsBySol[s.id] || []).length,
-						lastRun: (runsBySol[s.id] || [])[0],
-					};
-				});
-
-			return {
-				root: { sol: main, metric: bestMetric[main.id], runCount: (runsBySol[main.id] || []).length },
-				children: children,
-			};
-		}
-
-		function GraphView(props) {
-			var graph = props.graph;
-			var solutions = props.solutions;
-			var runs = props.runs;
-			if (!graph.root) {
-				return h('div', { style: { padding: '20px', textAlign: 'center', color: C.tx2, fontSize: '11px' } },
-					'No solutions yet');
+			function meta(s) {
+				return {
+					sol: s,
+					metric: bestMetric[s.id],
+					runCount: (runsBySol[s.id] || []).length,
+					lastRun: (runsBySol[s.id] || [])[0],
+				};
 			}
 
-			var main = graph.root;
+			var main = solutions.find(function (s) { return s.role === 'main'; });
+			if (!main) return [];
 
-			return h('div', { style: { padding: '10px 8px' } },
-				// ── main (root node) ──
-				h(GraphNode, {
-					sol: main.sol, metric: main.metric, runCount: main.runCount,
-					isMain: true, isLast: false, depth: 0,
-				}),
+			var byParent = {};
+			solutions.forEach(function (s) {
+				if (s.role === 'main') return;
+				var parentSlug = s.parentSlug || 'main';
+				if (!byParent[parentSlug]) byParent[parentSlug] = [];
+				byParent[parentSlug].push(s);
+			});
 
-				// ── experiments ──
-				graph.children.length > 0 ? h('div', {
-					style: { fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.tx2, padding: '8px 4px 4px 18px' },
-				}, 'Experiments') : null,
+			var rows = [];
+			function walk(slug, prefix, depth) {
+				var children = (byParent[slug] || []).slice().sort(function (a, b) {
+					var rank = function (s) { return s.status === 'active' ? 0 : s.status === 'merged' ? 1 : 2; };
+					return rank(a) - rank(b);
+				});
+				children.forEach(function (child, i) {
+					var isLast = i === children.length - 1;
+					rows.push(Object.assign(meta(child), {
+						prefix: prefix + (isLast ? '\u2514\u2500 ' : '\u251C\u2500 '),
+						depth: depth,
+						isLast: isLast,
+					}));
+					walk(child.slug, prefix + (isLast ? '   ' : '\u2502  '), depth + 1);
+				});
+			}
 
-				graph.children.map(function (node, i) {
-					return h(GraphNode, {
-						key: node.sol.id,
-						sol: node.sol, metric: node.metric, runCount: node.runCount,
-						lastRun: node.lastRun,
-						isLast: i === graph.children.length - 1,
-						depth: 1,
-					});
-				}),
-
-				graph.children.length === 0 ? h('div', {
-					style: { padding: '8px 18px', fontSize: '10px', color: C.tx2, fontStyle: 'italic' },
-				}, 'No experiments — ask the agent to fork one') : null,
-			);
+			var rootRow = Object.assign(meta(main), { prefix: '', depth: 0, isMain: true });
+			walk('main', '', 1);
+			return [rootRow].concat(rows);
 		}
 
-		function GraphNode(props) {
-			var s = props.sol;
-			var st = SOL_ST[s.status] || SOL_ST.active;
-			var isMain = props.isMain;
-			var isLast = props.isLast;
-			var depth = props.depth || 0;
-			var pad = 18 + depth * 20;
+		function TreeView(props) {
+			var rows = props.rows;
+			if (rows.length === 0) {
+				return h('div', { style: { padding: '20px', textAlign: 'center', color: C.tx2, fontSize: '11px' } },
+					'No solutions — ask the agent to initialize the lab');
+			}
+			return h('div', { style: { padding: '8px 6px' } },
+				rows.map(function (row) {
+					return h(TreeRow, { key: row.sol.id, row: row });
+				}));
+		}
 
-			var metricText = props.metric
-				? props.metric.name + ' ' + (typeof props.metric.value === 'number' ? props.metric.value.toFixed(3) : props.metric.value)
-				: null;
+		function TreeRow(props) {
+			var row = props.row;
+			var s = row.sol;
+			var st = SOL_ST[s.status] || SOL_ST.active;
+			var isMain = row.isMain;
 
 			return h('div', {
 				style: {
-					position: 'relative',
-					paddingLeft: pad + 'px',
-					paddingTop: '5px', paddingBottom: '5px',
-					marginBottom: '2px',
+					fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+					fontSize: '11px', lineHeight: '1.8',
+					padding: '0 4px',
+					whiteSpace: 'pre',
+					color: C.tx,
 				},
 			},
-				// tree connector line
-				depth > 0 ? h('div', {
-					style: {
-						position: 'absolute', left: (pad - 14) + 'px', top: 0, bottom: 0,
-						width: '1px', background: C.bd,
-					},
-				}) : null,
-				depth > 0 ? h('div', {
-					style: {
-						position: 'absolute', left: (pad - 14) + 'px', top: '14px',
-						width: '10px', height: '1px', background: C.bd,
-					},
-				}) : null,
+				h('span', { style: { color: C.bd2 } }, row.prefix),
+				h('span', {
+					style: { color: st.color, fontWeight: 700, marginRight: '4px', fontSize: isMain ? '13px' : '11px' },
+				}, isMain ? '\u2605' : st.dot),
+				h('span', {
+					style: { fontWeight: 600, color: C.tx, fontFamily: isMain ? 'inherit' : 'ui-monospace,monospace' },
+				}, s.name || s.slug),
 
-				// node content
-				h('div', {
-					style: {
-						display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap',
-					},
-				},
-					h('span', { style: { color: st.color, fontSize: '12px', fontWeight: 700 } },
-						isMain ? '★' : st.dot),
-					h('span', {
-						style: {
-							fontWeight: 600, fontSize: '12px', color: C.tx,
-							fontFamily: isMain ? 'inherit' : 'ui-monospace,monospace',
-						},
-					}, s.name || s.slug),
-					h(Tag, { st: st }),
-					props.runCount > 0 ? h('span', { style: { fontSize: '9px', color: C.tx2 } },
-						props.runCount + ' run' + (props.runCount > 1 ? 's' : '')) : null,
-					metricText ? h(MetricBadge, { name: props.metric.name, value: typeof props.metric.value === 'number' ? props.metric.value.toFixed(3) : props.metric.value }) : null,
-				),
+				'  ',
+				h(Tag, { st: st }),
 
-				// hypothesis
+				row.metric ? h('span', { style: { marginLeft: '6px' } },
+					h(MetricBadge, { name: row.metric.name, value: typeof row.metric.value === 'number' ? row.metric.value.toFixed(3) : row.metric.value })) : null,
+
+				row.runCount > 0 ? h('span', { style: { marginLeft: '6px', fontSize: '9px', color: C.tx2 } },
+					row.runCount + ' run' + (row.runCount > 1 ? 's' : '')) : null,
+
+				s.dirty ? h('span', { style: { marginLeft: '4px', fontSize: '9px', color: C.yellow } }, '\u270e') : null,
+
 				s.hypothesis ? h('div', {
-					style: { fontSize: '10px', color: C.tx2, marginTop: '2px', lineHeight: 1.4, fontStyle: 'italic' },
-				}, '❓ ', short(s.hypothesis, 80)) : null,
+					style: {
+						fontSize: '9px', color: C.tx2, lineHeight: 1.4,
+						paddingLeft: (row.prefix.length * 6 + 24) + 'px',
+						fontStyle: 'italic', fontFamily: 'inherit', whiteSpace: 'normal',
+					},
+				}, '\u2753 ', short(s.hypothesis, 70)) : null,
 
-				// conclusion
 				s.conclusion ? h('div', {
-					style: { fontSize: '10px', color: C.green, marginTop: '2px', lineHeight: 1.4 },
-				}, '💡 ', short(s.conclusion, 80)) : null,
-
-				// merge info
-				s.mergedIntoSlug ? h('div', {
-					style: { fontSize: '9px', color: C.brand, marginTop: '2px' },
-				}, '↳ merged into ', h('b', null, s.mergedIntoSlug)) : null,
-
-				// dirty indicator
-				s.dirty ? h('div', {
-					style: { fontSize: '9px', color: C.yellow, marginTop: '2px' },
-				}, '✎ has uncommitted changes') : null,
-
-				// last run status
-				props.lastRun ? h('div', {
-					style: { fontSize: '9px', color: C.tx2, marginTop: '2px' },
-				}, 'last run: ', h(Tag, { st: RUN_ST[props.lastRun.status] || RUN_ST.lost })) : null,
+					style: {
+						fontSize: '9px', color: C.green, lineHeight: 1.4,
+						paddingLeft: (row.prefix.length * 6 + 24) + 'px',
+						fontFamily: 'inherit', whiteSpace: 'normal',
+					},
+				}, '\uD83D\uDCA1 ', short(s.conclusion, 70)) : null,
 			);
 		}
 
-		// ── runs list (compact) ──────────────────────────────────────────────
+				// ── runs list (compact) ──────────────────────────────────────────────
 
 		function RunsList(props) {
 			var runs = props.runs;
@@ -388,10 +352,15 @@ window.__ModuleLoader__.load({
 
 		// ── agent commands reference ─────────────────────────────────────────
 
-		var AGENT_TOOLS = [
-			'lab_fork_solution', 'lab_checkpoint_solution', 'lab_merge_solution',
-			'lab_archive_solution', 'lab_restore_solution', 'lab_start_run',
-			'lab_stop_run', 'lab_list_solutions', 'lab_solution_diff',
+		var AGENT_HELP = [
+			['lab_fork_solution', '"从 main fork 一个新实验叫 lr-sweep"'],
+			['lab_checkpoint_solution', '"checkpoint 当前方案的修改"'],
+			['lab_merge_solution', '"把 lr-sweep 合并到 main"'],
+			['lab_archive_solution', '"归档 query32，结论是没效果"'],
+			['lab_start_run', '"在 agm-cosine 上跑 train.py"'],
+			['lab_stop_run', '"停掉 run-000003"'],
+			['lab_list_solutions', '"列出所有方案"'],
+			['lab_solution_diff', '"对比 agm-cosine 和 main"'],
 		];
 
 		function AgentRef() {
@@ -434,6 +403,11 @@ window.__ModuleLoader__.load({
 			var set = st[1];
 			st = st[0];
 
+			var helpState = useState(false);
+			var setHelp = helpState[1];
+			helpState = helpState[0];
+			var help = helpState;
+
 			var refresh = useCallback(function () {
 				Promise.all([call('project.get'), call('solutions.list'), call('runs.list')]).then(function (rs) {
 					var bad = rs.find(function (r) { return !r.ok; });
@@ -471,7 +445,7 @@ window.__ModuleLoader__.load({
 			}
 
 			var d = st.data;
-			var graph = buildGraph(d.solutions, d.runs);
+			var tree = buildTree(d.solutions, d.runs);
 			var activeCount = d.solutions.filter(function (s) { return s.status === 'active'; }).length;
 			var runningCount = d.runs.filter(function (r) { return r.status === 'running' || r.status === 'starting'; }).length;
 
@@ -501,7 +475,7 @@ window.__ModuleLoader__.load({
 
 				// content (scrollable)
 				h('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto' } },
-					h(GraphView, { graph: graph, solutions: d.solutions, runs: d.runs }),
+					h(TreeView, { rows: tree }),
 
 					// runs section
 					h('div', {
