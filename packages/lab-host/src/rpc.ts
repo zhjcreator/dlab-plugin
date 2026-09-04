@@ -34,6 +34,8 @@ type Endpoint =
   | 'solutions.updateMetadata'
   | 'runs.list'
   | 'runs.get'
+  | 'runs.start'
+  | 'runs.stop'
   | 'resources.get'
   | 'environment.get'
 
@@ -113,6 +115,28 @@ export async function dispatch(
 
       case 'runs.get':
         return ok(await service.runs.get(String(p.runId)))
+
+      case 'runs.start': {
+        const command = Array.isArray(p.command) ? (p.command as unknown[]).map(String) : []
+        return ok(
+          await service.runs.start({
+            solutionId: String(p.solution),
+            command,
+            title: typeof p.title === 'string' ? p.title : undefined,
+            resources:
+              p.gpuCount !== undefined || p.minFreeVramMB !== undefined
+                ? {
+                    mode: 'auto',
+                    ...(p.gpuCount !== undefined ? { gpuCount: Number(p.gpuCount) } : {}),
+                    ...(p.minFreeVramMB !== undefined ? { minFreeVramMB: Number(p.minFreeVramMB) } : {}),
+                  }
+                : undefined,
+          }),
+        )
+      }
+
+      case 'runs.stop':
+        return ok(await service.runs.stop(String(p.runId)))
 
       case 'resources.get':
         return ok(await service.resources.snapshot())

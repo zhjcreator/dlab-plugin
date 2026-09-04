@@ -10,7 +10,9 @@
 
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 import type { GitPort } from '@dlab/core'
 import type { GitStatus } from '@dlab/shared'
 
@@ -35,7 +37,7 @@ export class LocalGitPort implements GitPort {
   /** Run git inside the bare repo with an optional work-tree override. */
   private async run(
     args: string[],
-    opts: { cwd?: string; input?: string } = {},
+    opts: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv } = {},
   ): Promise<RunResult> {
     const full = [
       ...(opts.cwd ? [] : ['--git-dir', this.gitDir]),
@@ -45,6 +47,7 @@ export class LocalGitPort implements GitPort {
     try {
       const { stdout, stderr } = await execFileAsync('git', full, {
         maxBuffer: 64 * 1024 * 1024,
+        ...(opts.env ? { env: opts.env } : {}),
         ...(opts.input !== undefined ? { input: opts.input } : {}),
       })
       return { stdout: stdout.toString(), stderr: stderr.toString() }
@@ -222,9 +225,40 @@ export class LocalGitPort implements GitPort {
     return stdout.trim()
   }
 
+  /**
+   * Capture the working tree (tracked modified + staged + untracked
+   * non-ignored) as an immutable snapshot commit under refName, WITHOUT
+   * touching the branch HEAD or the solution's own index. Uses a temporary
+   * GIT_INDEX_FILE per DESIGN §25.
+   */
   async commitTreeSnapshot(path: string, refName: string, message: string): Promise<string> {
-    // Snapshot implementation uses a temporary GIT_INDEX_FILE; skeleton for Phase 1.
-    throw new Error('commitTreeSnapshot(): not implemented yet')
+    const dir = resolve(this.worktreeRoot, path)
+    const tmpIndex = join(tmpdir(), `dlab-snap-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const env = { ...process.env, GIT_INDEX_FILE: tmpIndex }
+    try {
+      // 1. seed the temp index with HEAD
+      await this.run(['read-tree', 'HEAD'], { cwd: dir, env })
+      // 2. stage everything from the working tree into the temp index
+      await this.run(['add', '-A'], { cwd: dir, env })
+      // 3. write the tree
+      const tree = await this.run(['write-tree'], { cwd: dir, env })
+      // 4. commit-tree with HEAD as parent
+      const parent = await this.run(['rev-parse', 'HEAD'], { cwd: dir })
+      const commit = await this.run(
+        ['commit-tree', tree.stdout.trim(), '-p', parent.stdout.trim(), '-m', message],
+        { cwd: dir },
+      )
+      const sha = commit.stdout.trim()
+      // 5. record the immutable ref
+      await this.run(['update-ref', refName, sha], { cwd: dir })
+      return sha
+    } finally {
+      try {
+        rmSync(tmpIndex, { force: true })
+      } catch {
+        /* best-effort temp cleanup */
+      }
+    }
   }
 
   async updateRef(refName: string, commit: string): Promise<void> {

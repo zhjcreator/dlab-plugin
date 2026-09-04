@@ -86,15 +86,27 @@ export interface StorePort {
 /** Spawns/observes the Run process. Implemented by @dlab/runner (local-runner.ts). */
 export interface RunnerPort {
   spawn(opts: {
+    /** Stable tracking key (the run id); defaults to cwd when omitted. */
+    key?: string
     cwd: string
     argv: string[]
     env: Record<string, string>
     logDir: string
+    /** Invoked with the exit code when the spawned process tree ends. */
+    onExit?: (code: number | null) => void
   }): Promise<{ pid: number; pgid?: number }>
   stop(runId: string): Promise<void>
   isAlive(runId: string): Promise<boolean>
+  /** Raw PID liveness (adoption check after a host restart). */
+  isPidAlive(pid: number): boolean
   /** Read the last N lines of a run's stdout log (tail). */
   tail(runId: string, maxLines: number): Promise<string>
+  /** Probe the shared environment for the fingerprint snapshot. */
+  probeEnvironment(projectRoot: string): Promise<{
+    fingerprint: string
+    pythonVersion?: string
+    requirements?: string
+  }>
 }
 
 /** GPU discovery + reservation. Implemented by @dlab/scheduler. */

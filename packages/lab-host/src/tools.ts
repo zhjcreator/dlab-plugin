@@ -8,8 +8,7 @@
  * Mutation tools: lab_fork_solution, lab_checkpoint_solution,
  *                 lab_archive_solution, lab_restore_solution,
  *                 lab_merge_solution, lab_update_solution_metadata
- *
- * Run start/stop tools land in Phase 3 together with run execution.
+ * Run tools:     lab_start_run, lab_stop_run (Phase 3)
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -270,6 +269,60 @@ export function apply(ctx: Context): void {
             conclusion: args.conclusion,
           }),
         )
+      },
+    }),
+  )
+
+  // ── run tools (Phase 3) ───────────────────────────────────────────────────
+
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_start_run',
+      description:
+        'Start an experiment run on a solution. Snapshots the current working tree immutably (uncommitted changes included, branch untouched), materializes a detached run worktree, and launches the command there with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits to the solution never affect the run.',
+      parameters: {
+        solution: { type: 'string', required: true, description: 'Solution id or slug' },
+        command: {
+          type: 'array',
+          required: true,
+          items: { type: 'string' },
+          description: 'argv to execute in the run worktree, e.g. ["python","train.py","--config","configs/x.yaml"]',
+        },
+        title: { type: 'string', description: 'Human-readable run title' },
+        gpuCount: { type: 'number', description: 'Auto-allocate this many GPUs' },
+        minFreeVramMB: { type: 'number', description: 'Minimum free VRAM per GPU (MB)' },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args) {
+        return json(
+          await lab.runs.start({
+            solutionId: args.solution,
+            command: args.command,
+            title: args.title,
+            resources:
+              args.gpuCount !== undefined || args.minFreeVramMB !== undefined
+                ? {
+                    mode: 'auto',
+                    ...(args.gpuCount !== undefined ? { gpuCount: args.gpuCount } : {}),
+                    ...(args.minFreeVramMB !== undefined ? { minFreeVramMB: args.minFreeVramMB } : {}),
+                  }
+                : undefined,
+          }),
+        )
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_stop_run',
+      description: 'Stop a running or queued experiment run (SIGTERM to its process group).',
+      parameters: {
+        runId: { type: 'string', required: true, description: 'Run id, e.g. run-000001' },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args) {
+        return json(await lab.runs.stop(args.runId))
       },
     }),
   )

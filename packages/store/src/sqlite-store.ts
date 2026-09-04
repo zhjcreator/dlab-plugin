@@ -203,6 +203,15 @@ export class SqliteStore implements StorePort {
     }
   }
 
+  private runTags(runId: string): string[] {
+    try {
+      const rows = this.db.prepare('SELECT tag FROM run_tags WHERE run_id = ?').all(runId) as { tag: string }[]
+      return rows.map((r) => r.tag)
+    } catch {
+      return []
+    }
+  }
+
   listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dlab/shared').ExperimentRun[]> {
     let sql = 'SELECT * FROM runs'
     const where: string[] = []
@@ -218,12 +227,12 @@ export class SqliteStore implements StorePort {
     if (where.length) sql += ' WHERE ' + where.join(' AND ')
     sql += ' ORDER BY created_at DESC'
     const rows = this.db.prepare(sql).all(params) as Record<string, unknown>[]
-    return Promise.resolve(rows.map((r) => SqliteStore.rowToRun(r)))
+    return Promise.resolve(rows.map((r) => ({ ...SqliteStore.rowToRun(r), tags: this.runTags(r.id as string) })))
   }
 
   getRun(id: string): Promise<import('@dlab/shared').ExperimentRun | undefined> {
     const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as Record<string, unknown> | undefined
-    return Promise.resolve(row ? SqliteStore.rowToRun(row) : undefined)
+    return Promise.resolve(row ? { ...SqliteStore.rowToRun(row), tags: this.runTags(row.id as string) } : undefined)
   }
 
   upsertRun(run: import('@dlab/shared').ExperimentRun): Promise<void> {
@@ -276,6 +285,10 @@ export class SqliteStore implements StorePort {
            finished_at = excluded.finished_at`,
       )
       .run(p)
+    this.db.prepare('DELETE FROM run_tags WHERE run_id = ?').run(run.id)
+    for (const tag of run.tags ?? []) {
+      this.db.prepare('INSERT OR IGNORE INTO run_tags (run_id, tag) VALUES (?, ?)').run(run.id, tag)
+    }
     return Promise.resolve()
   }
 
@@ -300,7 +313,7 @@ export class SqliteStore implements StorePort {
   // ── counters / reservations / events ─────────────────────────────────────
 
   async nextRunCounter(): Promise<number> {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE id LIKE 'run\\_%' ESCAPE '\\'").get() as { n: number }
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE id LIKE 'run-%'").get() as { n: number }
     return row.n + 1
   }
 

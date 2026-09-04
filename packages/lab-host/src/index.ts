@@ -179,7 +179,7 @@ export class LabService extends Service {
     },
   }
 
-  // ── runs (read-side live in Phase 2; start/stop land in Phase 3) ─────────
+  // ── runs ──────────────────────────────────────────────────────────────────
 
   runs = {
     list: async (filter?: { solutionId?: string }): Promise<RunView[]> => {
@@ -190,6 +190,20 @@ export class LabService extends Service {
     },
     get: async (runIdValue: string): Promise<RunView> => {
       const run: ExperimentRun = await this.core.runs.get(runIdValue)
+      return this.core.runView(run)
+    },
+    start: async (input: {
+      solutionId: string
+      command: string[]
+      title?: string
+      tags?: string[]
+      resources?: import('@dlab/shared').RunResourceRequest
+    }): Promise<RunView> => {
+      const run = await this.core.runs.start(input)
+      return this.core.runView(run)
+    },
+    stop: async (runIdValue: string): Promise<RunView> => {
+      const run = await this.core.runs.stop(runIdValue)
       return this.core.runView(run)
     },
   }

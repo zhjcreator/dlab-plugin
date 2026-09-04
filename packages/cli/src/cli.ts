@@ -222,6 +222,86 @@ export async function runCli(argv: string[]): Promise<void> {
       },
     )
 
+  const run = program.command('run').description('experiment runs')
+
+  run
+    .command('start <solution>')
+    .description('start a run: snapshot the solution tree and execute a command in a detached worktree')
+    .requiredOption('-c, --command <argv...>', 'argv to execute (e.g. -c python train.py --config x.yaml)')
+    .option('-t, --title <title>', 'run title')
+    .option('--gpu-count <n>', 'auto-allocate N GPUs', Number)
+    .option('--min-free-vram <mb>', 'minimum free VRAM per GPU (MB)', Number)
+    .option('--wait', 'wait for the run to finish and print its final status')
+    .action(
+      async (
+        solution: string,
+        opts: { command: string[]; title?: string; gpuCount?: number; minFreeVram?: number; wait?: boolean },
+      ) => {
+        const root = rootOf()
+        const { deps } = makeSolutionService(root, 'lab')
+        const { RunService } = await import('@dlab/core')
+        const runs = new RunService(deps)
+        const started = await runs.start({
+          solutionId: solution,
+          command: opts.command,
+          title: opts.title,
+          resources:
+            opts.gpuCount !== undefined || opts.minFreeVram !== undefined
+              ? {
+                  mode: 'auto',
+                  ...(opts.gpuCount !== undefined ? { gpuCount: opts.gpuCount } : {}),
+                  ...(opts.minFreeVram !== undefined ? { minFreeVramMB: opts.minFreeVram } : {}),
+                }
+              : undefined,
+        })
+        console.log(`started ${started.id}: snapshot=${started.snapshotCommit.slice(0, 8)} pid=${started.pid}`)
+        console.log(`  run dir:    ${started.runDir}`)
+        console.log(`  snapshot:   refs/dsh/runs/${started.id}`)
+        if (opts.wait) {
+          const deadline = Date.now() + 24 * 3600 * 1000
+          while (Date.now() < deadline) {
+            const r = await runs.get(started.id)
+            if (r.status !== 'running' && r.status !== 'starting' && r.status !== 'queued') {
+              console.log(`finished ${r.id}: status=${r.status} exit=${r.exitCode ?? '-'}`)
+              break
+            }
+            await new Promise((res) => setTimeout(res, 500))
+          }
+        }
+        ;(deps.store as SqliteStore).close()
+      },
+    )
+
+  run
+    .command('list')
+    .description('list runs, newest first')
+    .action(async () => {
+      const root = rootOf()
+      const { deps } = makeSolutionService(root, 'lab')
+      const { RunService } = await import('@dlab/core')
+      const all = await new RunService(deps).list()
+      for (const r of all) {
+        const gpuIds = (r.resources as { gpuIds?: number[] })?.gpuIds
+        console.log(
+          `${r.id}  ${r.status.padEnd(10)} ${String(r.exitCode ?? '-').padEnd(4)} ${gpuIds ? `gpu=${gpuIds.join(',')} ` : ''}${r.command.join(' ')}`,
+        )
+      }
+      ;(deps.store as SqliteStore).close()
+    })
+
+  run
+    .command('stop <runId>')
+    .description('stop a running run')
+    .action(async (runId: string) => {
+      const root = rootOf()
+      const { deps } = makeSolutionService(root, 'lab')
+      const { RunService } = await import('@dlab/core')
+      const runs = new RunService(deps)
+      const stopped = await runs.stop(runId)
+      console.log(`stopped ${stopped.id}: status=${stopped.status}`)
+      ;(deps.store as SqliteStore).close()
+    })
+
   await program.parseAsync(argv)
 }
 

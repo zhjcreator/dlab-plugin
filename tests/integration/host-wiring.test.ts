@@ -112,7 +112,7 @@ describe('host wiring: LabService on real Cordis', () => {
     expect(workspaceCalls).toContainEqual(`create:${join(labRoot, 'solutions/main')}`)
   })
 
-  it('registers all 13 lab_* tools', () => {
+  it('registers all 15 lab_* tools', () => {
     const names = registeredTools.map((t) => t.name).sort()
     expect(names).toEqual([
       'lab_archive_solution',
@@ -126,7 +126,9 @@ describe('host wiring: LabService on real Cordis', () => {
       'lab_merge_solution',
       'lab_restore_solution',
       'lab_solution_diff',
+      'lab_start_run',
       'lab_status',
+      'lab_stop_run',
       'lab_update_solution_metadata',
     ])
   })
