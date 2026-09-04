@@ -1,8 +1,8 @@
 {
-  "name": "@dlab/store",
+  "name": "@dsh-lab/store",
   "version": "0.1.0",
   "private": true,
-  "description": "SQLite persistence (better-sqlite3) implementing @dlab/core StorePort",
+  "description": "SQLite persistence (better-sqlite3) implementing @dsh-lab/core StorePort",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -21,8 +21,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dlab/shared": "workspace:*",
-    "@dlab/core": "workspace:*",
+    "@dsh-lab/shared": "workspace:*",
+    "@dsh-lab/core": "workspace:*",
     "better-sqlite3": "^11.5.0"
   },
   "devDependencies": {

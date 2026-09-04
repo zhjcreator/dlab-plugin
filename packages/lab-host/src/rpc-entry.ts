@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import { dispatch, RPC_CHANNEL } from './rpc.js'
 
-export const name = 'dlab-lab-rpc'
+export const name = 'dsh-lab-rpc'
 export const inject = ['lab', 'connection']
 
 export function apply(ctx: Context): void {
@@ -22,5 +22,5 @@ export function apply(ctx: Context): void {
         /* best-effort cleanup */
       })
     }
-  }, 'dlab-lab-rpc: channel')
+  }, 'dsh-lab-rpc: channel')
 }

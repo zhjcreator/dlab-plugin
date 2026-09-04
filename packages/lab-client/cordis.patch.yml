@@ -2,7 +2,7 @@
 #
 # The host row below mounts the package's (no-op) host half so the client-
 # modules scanner discovers its `dsh.client` declaration and serves the
-# browser bundle at /plugins/@dlab/lab-client/client.js.
+# browser bundle at /plugins/@dsh-lab/client/client.js.
 #
 # Browser half (lib/client.js, hand-written module bundle):
 #   - with dsh-better-sidebar present: registers a "DLab" tab in the right
@@ -10,8 +10,8 @@
 #     activates/disposes with the service — never a hard dependency)
 #   - always: a "🧪" button in conversation.session.header.actions that opens
 #     the sidebar tab when available, or a standalone overlay panel otherwise
-#   - data via the /dlab Connection RPC channel served by @dlab/lab-host
+#   - data via the /dlab Connection RPC channel served by @dsh-lab/host
 
 - insert:
     - id: dlab-client
-      name: '@dlab/lab-client'
+      name: '@dsh-lab/client'

@@ -3,8 +3,8 @@
  * and allocate GPUs atomically under the scheduler lock. No Slurm.
  */
 
-import type { GpuState, ResourceView, RunResourceRequest } from '@dlab/shared'
-import type { SchedulerPort } from '@dlab/core'
+import type { GpuState, ResourceView, RunResourceRequest } from '@dsh-lab/shared'
+import type { SchedulerPort } from '@dsh-lab/core'
 import { queryNvidiaSmi, type RawGpu } from './nvidia-smi.js'
 
 export interface GpuSchedulerOptions {

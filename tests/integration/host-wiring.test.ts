@@ -150,7 +150,7 @@ describe('host wiring: LabService on real Cordis', () => {
     expect(readFileSync(join(labRoot, 'solutions/host-fork/README.md'), 'utf8')).toBeTruthy()
   })
 
-  it('registers the /dlab RPC channel and dispatches', async () => {
+  it('registers the /dsh-lab RPC channel and dispatches', async () => {
     expect(rpcChannel).toBe(RPC_CHANNEL)
     expect(rpcHandler).toBeDefined()
     const res = (await rpcHandler!('solutions.list', {})) as {
@@ -179,7 +179,7 @@ describe('host wiring: LabService on real Cordis', () => {
 
   it('shellEnv contributor exposes DSH_LAB_ROOT / DSH_LAB_PROJECT', () => {
     expect(envContributor).toBeDefined()
-    expect(envContributor!.name).toBe('dlab-lab')
+    expect(envContributor!.name).toBe('dsh-lab')
     expect(Object.keys(envContributor!.variables).sort()).toEqual(['DSH_LAB_PROJECT', 'DSH_LAB_ROOT'])
     const resolved = envContributor!.resolve(fakeExec)
     expect(resolved.DSH_LAB_ROOT).toBe(labRoot)

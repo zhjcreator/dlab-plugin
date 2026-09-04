@@ -1,5 +1,5 @@
 -- dlab SQLite schema (Phase 1 skeleton)
--- Columns mirror @dlab/shared types; ids are strings (ULID-based).
+-- Columns mirror @dsh-lab/shared types; ids are strings (ULID-based).
 -- All timestamps are integer epoch ms unless noted.
 
 CREATE TABLE IF NOT EXISTS projects (

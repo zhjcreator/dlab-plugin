@@ -4,7 +4,7 @@
  * them to DSH's event bus or persist them in the events table.
  */
 
-import type { LabEventType } from '@dlab/shared'
+import type { LabEventType } from '@dsh-lab/shared'
 
 export interface LabEventPayload {
   type: LabEventType

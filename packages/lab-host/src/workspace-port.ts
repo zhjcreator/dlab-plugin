@@ -6,7 +6,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
-import type { WorkspacePort } from '@dlab/core'
+import type { WorkspacePort } from '@dsh-lab/core'
 
 /** Minimal structural view of ctx.workspaceRegistry this bridge needs. */
 interface WorkspaceRegistryShape {

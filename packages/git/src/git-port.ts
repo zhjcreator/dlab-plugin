@@ -2,7 +2,7 @@
  * GitPort implementation using the `git` CLI (execFile, never shell).
  *
  * This is the ONLY module in the whole plugin that may spawn `git`.
- * Business code must go through GitPort defined in @dlab/core.
+ * Business code must go through GitPort defined in @dsh-lab/core.
  *
  * Phase-1 skeleton: signatures + one safe exec helper. The worktree and
  * merge internals are filled in next.
@@ -13,8 +13,8 @@ import { promisify } from 'node:util'
 import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { rmSync } from 'node:fs'
-import type { GitPort } from '@dlab/core'
-import type { GitStatus } from '@dlab/shared'
+import type { GitPort } from '@dsh-lab/core'
+import type { GitStatus } from '@dsh-lab/shared'
 
 const execFileAsync = promisify(execFile)
 

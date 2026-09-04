@@ -4,15 +4,15 @@
  * WorkspacePort from the caller (DSH bridge in-process, no-op in tests),
  * and exposes view-shaped operations used by LabService, tools, and RPC.
  *
- * No DSH imports here — only @dlab/* packages.
+ * No DSH imports here — only @dsh-lab/* packages.
  */
 
 import { mkdirSync, existsSync } from 'node:fs'
 import { resolve, isAbsolute } from 'node:path'
-import { LocalGitPort } from '@dlab/git'
-import { SqliteStore } from '@dlab/store'
-import { LocalRunner } from '@dlab/runner'
-import { GpuScheduler } from '@dlab/scheduler'
+import { LocalGitPort } from '@dsh-lab/git'
+import { SqliteStore } from '@dsh-lab/store'
+import { LocalRunner } from '@dsh-lab/runner'
+import { GpuScheduler } from '@dsh-lab/scheduler'
 import {
   SolutionService,
   RunService,
@@ -20,7 +20,7 @@ import {
   type LabConfig,
   type LabDeps,
   type WorkspacePort,
-} from '@dlab/core'
+} from '@dsh-lab/core'
 import type {
   EnvironmentView,
   ExperimentRun,
@@ -28,7 +28,7 @@ import type {
   RunView,
   Solution,
   SolutionView,
-} from '@dlab/shared'
+} from '@dsh-lab/shared'
 
 export interface LabCoreOptions {
   solutionRoot: string

@@ -6,7 +6,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 
-export const name = 'dlab-lab-system-prompt'
+export const name = 'dsh-lab-system-prompt'
 export const inject = ['lab', 'systemPrompt']
 
 export function apply(ctx: Context): void {

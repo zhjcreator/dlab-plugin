@@ -182,6 +182,11 @@ solutions/main  solutions/agm-cosine  solutions/rae-depth4
 
 ## 5. 插件拓扑（包结构）
 
+> **命名记录（2026-09-04）**：npm scope `@dlab` 已被他人注册（`@dlab/core` 存在 7 个版本，owner 为第三方），
+> 存在发布阻断 + 依赖混淆风险，全部包已从 `@dlab/*` 重命名为 `@dsh-lab/*`（npm 组织名 `dsh-lab` 未注册，可创建）。
+> 映射：`@dlab/lab-host → @dsh-lab/host`、`@dlab/lab-client → @dsh-lab/client`、`@dlab/preset-lab → @dsh-lab/preset`、
+> 其余 `@dlab/X → @dsh-lab/X`；RPC 通道 `/dlab → /dsh-lab`。仓库目录名（packages/lab-host 等）与本地路径不变。
+
 按 **three-roles** + `seams.md` 服务归属规则，插件拆分为 9 个内部包 / 仓库根 layout。设计原则：服务归属判断以 *seams.md* 表为准——「模型提供方/执行者/存储后端」放 host-plane 行，跨 session 共享的东西放 host composition；preset 只贡献会话内的 tool / persona / prompt section。
 
 ```text
@@ -321,7 +326,7 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 * `core/` 与 `git/`/`store/` 之间的接口紧（`GitPort` 是 interface,但实现只在 git/ 包内）
 * 减少 install / link / version pin 的复杂度
 
-未来若 `core/` 被多个 bundle 复用、或有外部插件想提供自己的 `GitPort` 实现,再把 `core/` 拆成独立 `@dlab/core` npm 包;此时把 `ports.ts` 拆成 `@dlab/ports`。
+未来若 `core/` 被多个 bundle 复用、或有外部插件想提供自己的 `GitPort` 实现,再把 `core/` 拆成独立 `@dsh-lab/core` npm 包;此时把 `ports.ts` 拆成 `@dsh-lab/ports`。
 
 ### 5.4 Phase 1 的最小可验证闭环
 
@@ -347,35 +352,35 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 # packages/lab-host/cordis.patch.yml
 - insert:
     - id: lab-store
-      name: '@dlab/lab-host/store-row'
+      name: '@dsh-lab/host/store-row'
 
     - id: lab-storage-domain
-      name: '@dlab/lab-host/storage-domain-row'
+      name: '@dsh-lab/host/storage-domain-row'
 
     - id: lab-git
-      name: '@dlab/lab-host/git-row'
+      name: '@dsh-lab/host/git-row'
 
     - id: lab-runner
-      name: '@dlab/lab-host/runner-row'
+      name: '@dsh-lab/host/runner-row'
 
     - id: lab-scheduler
-      name: '@dlab/lab-host/scheduler-row'
+      name: '@dsh-lab/host/scheduler-row'
 
     - id: lab-shell-env
-      name: '@dlab/lab-host/shell-env-row'
+      name: '@dsh-lab/host/shell-env-row'
 
     - id: lab-system-prompt
-      name: '@dlab/lab-host/system-prompt-row'
+      name: '@dsh-lab/host/system-prompt-row'
 
     - id: lab-tools
-      name: '@dlab/lab-host/tools-row'
+      name: '@dsh-lab/host/tools-row'
 
     - id: lab-rpc
-      name: '@dlab/lab-host/rpc-row'
+      name: '@dsh-lab/host/rpc-row'
       inject: [connection]
 
     - id: lab-service
-      name: '@dlab/lab-host/lab-service-row'
+      name: '@dsh-lab/host/lab-service-row'
       inject:
         - workspaceRegistry
         - tools

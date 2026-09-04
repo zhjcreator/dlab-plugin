@@ -1,5 +1,5 @@
 /**
- * @dlab/lab-host root entry: provides the `lab` service on ctx.
+ * @dsh-lab/host root entry: provides the `lab` service on ctx.
  *
  * Mount once per process (host composition). The consumer rows —
  * './tools', './rpc', './shell-env', './system-prompt' — mount separately so
@@ -19,7 +19,7 @@ import type {
   RunView,
   Solution,
   SolutionView,
-} from '@dlab/shared'
+} from '@dsh-lab/shared'
 
 export interface Config {
   solutionRoot: string
@@ -157,7 +157,7 @@ export class LabService extends Service {
       return view
     },
     diff: async (a: string, b: string): Promise<DiffView> => this.core.solutions.diff(a, b),
-    merge: async (input: MergeSolutionInput): Promise<import('@dlab/shared').MergeResult> => {
+    merge: async (input: MergeSolutionInput): Promise<import('@dsh-lab/shared').MergeResult> => {
       const result = await this.core.solutions.merge(input)
       void this.refreshContext().catch(() => {})
       return result
@@ -197,7 +197,7 @@ export class LabService extends Service {
       command: string[]
       title?: string
       tags?: string[]
-      resources?: import('@dlab/shared').RunResourceRequest
+      resources?: import('@dsh-lab/shared').RunResourceRequest
     }): Promise<RunView> => {
       const run = await this.core.runs.start(input)
       return this.core.runView(run)
@@ -228,7 +228,7 @@ export class LabService extends Service {
   }
 }
 
-export const name = 'dlab-lab-host'
+export const name = 'dsh-lab-host'
 
 export function apply(ctx: Context, config: Config): void {
   ctx.plugin(LabService, config)

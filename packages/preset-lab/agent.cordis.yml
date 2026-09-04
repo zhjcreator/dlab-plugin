@@ -7,13 +7,13 @@
 #
 # lab tools resolve the HOST-provided `lab` service via ctx.get (they never
 # publish a service themselves). The host rows that provide lab / git / store
-# / runner / scheduler live in the host composition (@dlab/lab-host), because
+# / runner / scheduler live in the host composition (@dsh-lab/host), because
 # they are shared across every session.
 
 # The lab_* tools (registered into this preset's tools layer). The tool plugin
 # itself publishes nothing; it consumes the host 'lab' service.
 - id: tool-dlab-lab
-  name: '@dlab/lab-tool-set'
+  name: '@dsh-lab/lab-tool-set'
   inject:
     - tools
   config: {}

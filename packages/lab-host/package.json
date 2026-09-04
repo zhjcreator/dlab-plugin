@@ -1,5 +1,5 @@
 {
-  "name": "@dlab/lab-host",
+  "name": "@dsh-lab/host",
   "version": "0.1.0",
   "private": true,
   "description": "DSH Host composition bundle for the Deep Learning Lab \u2014 provides ctx.lab, /dlab RPC channel, lab_* model tools, DSH_LAB_* shell env, system-prompt section",
@@ -44,12 +44,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dlab/shared": "workspace:*",
-    "@dlab/core": "workspace:*",
-    "@dlab/git": "workspace:*",
-    "@dlab/store": "workspace:*",
-    "@dlab/runner": "workspace:*",
-    "@dlab/scheduler": "workspace:*"
+    "@dsh-lab/shared": "workspace:*",
+    "@dsh-lab/core": "workspace:*",
+    "@dsh-lab/git": "workspace:*",
+    "@dsh-lab/store": "workspace:*",
+    "@dsh-lab/runner": "workspace:*",
+    "@dsh-lab/scheduler": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

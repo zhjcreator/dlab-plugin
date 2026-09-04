@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { tailFile } from './log-tee.js'
 import { isPidAlive } from './reconcile.js'
-import type { RunnerPort } from '@dlab/core'
+import type { RunnerPort } from '@dsh-lab/core'
 
 const execFileAsync = promisify(execFile)
 

@@ -8,12 +8,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-shell-env'
 
-export const name = 'dlab-lab-shell-env'
+export const name = 'dsh-lab-shell-env'
 export const inject = ['lab', 'shellEnv']
 
 export function apply(ctx: Context): void {
   ctx.shellEnv.register({
-    name: 'dlab-lab',
+    name: 'dsh-lab',
     variables: {
       DSH_LAB_ROOT: {
         description: 'Absolute root of the Deep Learning Lab project (solutions/, experiments/, .dsh-lab/).',

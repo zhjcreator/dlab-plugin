@@ -10,7 +10,7 @@ import {
   NotFoundError,
   assertSlug,
   resolveInside,
-} from '@dlab/shared'
+} from '@dsh-lab/shared'
 import type {
   DiffView,
   ForkSolutionInput,
@@ -20,8 +20,8 @@ import type {
   MergeSolutionInput,
   Solution,
   SolutionStatus,
-} from '@dlab/shared'
-import { solutionId } from '@dlab/shared'
+} from '@dsh-lab/shared'
+import { solutionId } from '@dsh-lab/shared'
 import type { GitPort, LabDeps, StorePort, WorkspacePort } from './ports.js'
 
 export class SolutionService {

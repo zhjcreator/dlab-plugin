@@ -1,5 +1,5 @@
 /**
- * @dlab/lab-client browser half.
+ * @dsh-lab/client browser half.
  *
  * Format: the DSH client-module bundle shape — a
  * `window.__ModuleLoader__.load({ id, factory })` wrapper whose factory
@@ -18,14 +18,14 @@
  *      the sidebar service IS available the same button opens the tab.
  *
  * All data flows through the /dlab Connection RPC channel served by
- * @dlab/lab-host. Plain React.createElement (no JSX — this file is not
+ * @dsh-lab/host. Plain React.createElement (no JSX — this file is not
  * transformed by any compiler).
  */
 
 /* eslint-disable */
 
 window.__ModuleLoader__.load({
-	id: '@dlab/lab-client',
+	id: '@dsh-lab/client',
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
 		var useCallback = React.useCallback;
 		var createPortal = require('react-dom').createPortal;
 
-		var RPC_CHANNEL = '/dlab';
+		var RPC_CHANNEL = '/dsh-lab';
 		var POLL_MS = 5000;
 
 		// ── /dlab RPC client ──────────────────────────────────────────────────
@@ -186,7 +186,7 @@ window.__ModuleLoader__.load({
 											{ style: S.actions },
 											createElement('button', { style: S.btn, onClick: function () { act('project.init', {}); } }, 'Initialize lab'),
 										)
-									: createElement('div', { style: S.dim }, 'Is @dlab/lab-host mounted in this profile?'),
+									: createElement('div', { style: S.dim }, 'Is @dsh-lab/host mounted in this profile?'),
 							)
 						: createElement('div', { style: S.dim }, 'Loading…'),
 				);
@@ -326,7 +326,7 @@ window.__ModuleLoader__.load({
 			function toggle() {
 				var bs = ctx && ctx.get ? ctx.get('betterSidebar') : undefined;
 				if (bs && typeof bs.openTab === 'function') {
-					bs.openTab({ type: 'dlab:lab' });
+					bs.openTab({ type: 'dsh-lab:lab' });
 					return;
 				}
 				setOpen(!open);
@@ -371,7 +371,7 @@ window.__ModuleLoader__.load({
 					bsCtx.effect(
 						function () {
 							return bsCtx.betterSidebar.registerTab({
-								id: 'dlab:lab',
+								id: 'dsh-lab:lab',
 								title: 'DLab',
 								order: 150,
 								single: true,
@@ -383,7 +383,7 @@ window.__ModuleLoader__.load({
 								},
 							});
 						},
-						'dlab-lab-client: sidebar tab',
+						'dsh-lab-client: sidebar tab',
 					);
 				});
 			} catch (e) {
@@ -398,7 +398,7 @@ window.__ModuleLoader__.load({
 				return slots.register(
 					{
 						name: 'conversation.session.header.actions',
-						id: 'dlab-lab',
+						id: 'dsh-lab',
 						order: 30,
 						inject: function () {
 							return { ctx: ctx };

@@ -9,14 +9,14 @@
 
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { InvalidStateError, NotFoundError, resolveInside } from '@dlab/shared'
+import { InvalidStateError, NotFoundError, resolveInside } from '@dsh-lab/shared'
 import type {
   ExperimentRun,
   RunMetric,
   RunResourceRequest,
   RunStatus,
   Solution,
-} from '@dlab/shared'
+} from '@dsh-lab/shared'
 import type { LabDeps } from './ports.js'
 
 function isTerminal(status: RunStatus): boolean {

@@ -8,12 +8,12 @@
 import { mkdirSync, existsSync } from 'node:fs'
 import { resolve, isAbsolute } from 'node:path'
 import { Command } from 'commander'
-import { LocalGitPort } from '@dlab/git'
-import { SqliteStore } from '@dlab/store'
-import { LocalRunner } from '@dlab/runner'
-import { GpuScheduler } from '@dlab/scheduler'
-import { SolutionService } from '@dlab/core'
-import type { LabConfig, LabDeps } from '@dlab/core'
+import { LocalGitPort } from '@dsh-lab/git'
+import { SqliteStore } from '@dsh-lab/store'
+import { LocalRunner } from '@dsh-lab/runner'
+import { GpuScheduler } from '@dsh-lab/scheduler'
+import { SolutionService } from '@dsh-lab/core'
+import type { LabConfig, LabDeps } from '@dsh-lab/core'
 
 export function makeConfig(root: string, projectName: string): LabConfig {
   const projectRoot = isAbsolute(root) ? root : resolve(process.cwd(), root)
@@ -239,7 +239,7 @@ export async function runCli(argv: string[]): Promise<void> {
       ) => {
         const root = rootOf()
         const { deps } = makeSolutionService(root, 'lab')
-        const { RunService } = await import('@dlab/core')
+        const { RunService } = await import('@dsh-lab/core')
         const runs = new RunService(deps)
         const started = await runs.start({
           solutionId: solution,
@@ -278,7 +278,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .action(async () => {
       const root = rootOf()
       const { deps } = makeSolutionService(root, 'lab')
-      const { RunService } = await import('@dlab/core')
+      const { RunService } = await import('@dsh-lab/core')
       const all = await new RunService(deps).list()
       for (const r of all) {
         const gpuIds = (r.resources as { gpuIds?: number[] })?.gpuIds
@@ -295,7 +295,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .action(async (runId: string) => {
       const root = rootOf()
       const { deps } = makeSolutionService(root, 'lab')
-      const { RunService } = await import('@dlab/core')
+      const { RunService } = await import('@dsh-lab/core')
       const runs = new RunService(deps)
       const stopped = await runs.stop(runId)
       console.log(`stopped ${stopped.id}: status=${stopped.status}`)

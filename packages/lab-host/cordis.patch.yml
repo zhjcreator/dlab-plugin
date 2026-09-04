@@ -13,19 +13,19 @@
 
 - insert:
     - id: lab-service
-      name: '@dlab/lab-host'
+      name: '@dsh-lab/host'
       config:
         solutionRoot: /home2/zhanghanjin/WorkSpace/dsh-scholar
         projectName: dsh-scholar
 
     - id: lab-tools
-      name: '@dlab/lab-host/tools'
+      name: '@dsh-lab/host/tools'
 
     - id: lab-rpc
-      name: '@dlab/lab-host/rpc'
+      name: '@dsh-lab/host/rpc'
 
     - id: lab-shell-env
-      name: '@dlab/lab-host/shell-env'
+      name: '@dsh-lab/host/shell-env'
 
     - id: lab-system-prompt
-      name: '@dlab/lab-host/system-prompt'
+      name: '@dsh-lab/host/system-prompt'

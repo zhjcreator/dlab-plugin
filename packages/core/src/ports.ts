@@ -1,7 +1,7 @@
 /**
  * Ports (hexagonal seams) that the core use-cases depend on.
  *
- * Each port is a minimal interface owned by @dlab/core. Concrete DSH-aware
+ * Each port is a minimal interface owned by @dsh-lab/core. Concrete DSH-aware
  * or CLI-aware adapters implement them in git/, store/, runner/, scheduler/,
  * and the host layer. Core NEVER imports DSH; the adapters do.
  */
@@ -13,9 +13,9 @@ import type {
   MergeResult,
   RunResourceRequest,
   RunStatus,
-} from '@dlab/shared'
+} from '@dsh-lab/shared'
 
-/** Git operations the core needs. Implemented by @dlab/git (git-port.ts). */
+/** Git operations the core needs. Implemented by @dsh-lab/git (git-port.ts). */
 export interface GitPort {
   gitDir: string
   worktreeRoot: string
@@ -53,37 +53,37 @@ export interface GitPort {
   changedFilesBetween(a: string, b: string): Promise<{ status: 'A' | 'M' | 'D'; path: string }[]>
 }
 
-/** Durable store the core uses. Implemented by @dlab/store (sqlite-store.ts). */
+/** Durable store the core uses. Implemented by @dsh-lab/store (sqlite-store.ts). */
 export interface StorePort {
-  getProject(): Promise<import('@dlab/shared').Project | undefined>
-  createProject(input: { name: string; rootPath: string }): Promise<import('@dlab/shared').Project>
+  getProject(): Promise<import('@dsh-lab/shared').Project | undefined>
+  createProject(input: { name: string; rootPath: string }): Promise<import('@dsh-lab/shared').Project>
 
-  listSolutions(): Promise<import('@dlab/shared').Solution[]>
-  getSolution(id: string): Promise<import('@dlab/shared').Solution | undefined>
-  getSolutionBySlug(slug: string): Promise<import('@dlab/shared').Solution | undefined>
-  upsertSolution(solution: import('@dlab/shared').Solution): Promise<void>
+  listSolutions(): Promise<import('@dsh-lab/shared').Solution[]>
+  getSolution(id: string): Promise<import('@dsh-lab/shared').Solution | undefined>
+  getSolutionBySlug(slug: string): Promise<import('@dsh-lab/shared').Solution | undefined>
+  upsertSolution(solution: import('@dsh-lab/shared').Solution): Promise<void>
   /** Record which solution is the project's main (set once at init). */
   setMainSolution(projectId: string, solutionId: string): Promise<void>
 
-  listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dlab/shared').ExperimentRun[]>
-  getRun(id: string): Promise<import('@dlab/shared').ExperimentRun | undefined>
-  upsertRun(run: import('@dlab/shared').ExperimentRun): Promise<void>
+  listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dsh-lab/shared').ExperimentRun[]>
+  getRun(id: string): Promise<import('@dsh-lab/shared').ExperimentRun | undefined>
+  upsertRun(run: import('@dsh-lab/shared').ExperimentRun): Promise<void>
 
-  upsertRunMetric(metric: import('@dlab/shared').RunMetric): Promise<void>
-  listRunMetrics(runId: string): Promise<import('@dlab/shared').RunMetric[]>
+  upsertRunMetric(metric: import('@dsh-lab/shared').RunMetric): Promise<void>
+  listRunMetrics(runId: string): Promise<import('@dsh-lab/shared').RunMetric[]>
 
   nextRunCounter(): Promise<number>
 
-  listReservations(): Promise<import('@dlab/shared').GpuReservation[]>
+  listReservations(): Promise<import('@dsh-lab/shared').GpuReservation[]>
   reserveGpu(gpuId: number, runId: string): Promise<void>
   releaseGpu(gpuId: number): Promise<void>
 
-  appendEvent(event: { type: import('@dlab/shared').LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void>
+  appendEvent(event: { type: import('@dsh-lab/shared').LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void>
 
   transaction<T>(fn: () => Promise<T>): Promise<T>
 }
 
-/** Spawns/observes the Run process. Implemented by @dlab/runner (local-runner.ts). */
+/** Spawns/observes the Run process. Implemented by @dsh-lab/runner (local-runner.ts). */
 export interface RunnerPort {
   spawn(opts: {
     /** Stable tracking key (the run id); defaults to cwd when omitted. */
@@ -109,13 +109,13 @@ export interface RunnerPort {
   }>
 }
 
-/** GPU discovery + reservation. Implemented by @dlab/scheduler. */
+/** GPU discovery + reservation. Implemented by @dsh-lab/scheduler. */
 export interface SchedulerPort {
-  discover(): Promise<import('@dlab/shared').GpuState[]>
+  discover(): Promise<import('@dsh-lab/shared').GpuState[]>
   /** Atomically allocate GPUs; rejects with details when insufficient. */
   allocate(request: RunResourceRequest): Promise<number[]>
   release(gpuIds: number[]): Promise<void>
-  snapshot(): Promise<import('@dlab/shared').ResourceView>
+  snapshot(): Promise<import('@dsh-lab/shared').ResourceView>
 }
 
 /** DSH Workspace registry bridge; null-impl in CLI mode. */

@@ -8,8 +8,8 @@ import Database from 'better-sqlite3'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import type { LabEventType, Project, RunMetric, RunStatus, Solution } from '@dlab/shared'
-import type { StorePort } from '@dlab/core'
+import type { LabEventType, Project, RunMetric, RunStatus, Solution } from '@dsh-lab/shared'
+import type { StorePort } from '@dsh-lab/core'
 
 const SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), 'schema.sql')
 
@@ -177,19 +177,19 @@ export class SqliteStore implements StorePort {
   // ── runs ─────────────────────────────────────────────────────────────────
 
   /** Map a raw snake_case runs row to the camelCase domain object. */
-  private static rowToRun(row: Record<string, unknown>): import('@dlab/shared').ExperimentRun {
+  private static rowToRun(row: Record<string, unknown>): import('@dsh-lab/shared').ExperimentRun {
     return {
       id: row.id as string,
       projectId: row.project_id as string,
       solutionId: row.solution_id as string,
       snapshotCommit: row.snapshot_commit as string,
       sourceHeadCommit: row.source_head_commit as string,
-      status: row.status as import('@dlab/shared').RunStatus,
+      status: row.status as import('@dsh-lab/shared').RunStatus,
       title: (row.title as string | null) ?? undefined,
       description: (row.description as string | null) ?? undefined,
       runProfileId: (row.run_profile_id as string | null) ?? undefined,
       command: JSON.parse((row.command_json as string) ?? '[]') as string[],
-      resources: JSON.parse((row.resources_json as string) ?? '{}') as import('@dlab/shared').RunResourceRequest,
+      resources: JSON.parse((row.resources_json as string) ?? '{}') as import('@dsh-lab/shared').RunResourceRequest,
       environmentFingerprint: (row.environment_fingerprint as string | null) ?? 'env:unknown',
       runDir: row.run_dir as string,
       worktreePath: (row.worktree_path as string | null) ?? undefined,
@@ -212,7 +212,7 @@ export class SqliteStore implements StorePort {
     }
   }
 
-  listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dlab/shared').ExperimentRun[]> {
+  listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dsh-lab/shared').ExperimentRun[]> {
     let sql = 'SELECT * FROM runs'
     const where: string[] = []
     const params: Record<string, unknown> = {}
@@ -230,12 +230,12 @@ export class SqliteStore implements StorePort {
     return Promise.resolve(rows.map((r) => ({ ...SqliteStore.rowToRun(r), tags: this.runTags(r.id as string) })))
   }
 
-  getRun(id: string): Promise<import('@dlab/shared').ExperimentRun | undefined> {
+  getRun(id: string): Promise<import('@dsh-lab/shared').ExperimentRun | undefined> {
     const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return Promise.resolve(row ? { ...SqliteStore.rowToRun(row), tags: this.runTags(row.id as string) } : undefined)
   }
 
-  upsertRun(run: import('@dlab/shared').ExperimentRun): Promise<void> {
+  upsertRun(run: import('@dsh-lab/shared').ExperimentRun): Promise<void> {
     const p: Record<string, unknown> = {
       id: run.id,
       projectId: run.projectId,
@@ -317,10 +317,10 @@ export class SqliteStore implements StorePort {
     return row.n + 1
   }
 
-  listReservations(): Promise<import('@dlab/shared').GpuReservation[]> {
+  listReservations(): Promise<import('@dsh-lab/shared').GpuReservation[]> {
     const rows = this.db
       .prepare('SELECT gpu_id, run_id, reserved_at FROM gpu_reservations')
-      .all() as import('@dlab/shared').GpuReservation[]
+      .all() as import('@dsh-lab/shared').GpuReservation[]
     return Promise.resolve(rows)
   }
 

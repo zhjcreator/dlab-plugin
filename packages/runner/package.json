@@ -1,5 +1,5 @@
 {
-  "name": "@dlab/runner",
+  "name": "@dsh-lab/runner",
   "version": "0.1.0",
   "private": true,
   "description": "Local process runner for experiment Runs — wraps ctx.subprocess in host mode, plain child_process in CLI mode",
@@ -18,8 +18,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dlab/shared": "workspace:*",
-    "@dlab/core": "workspace:*"
+    "@dsh-lab/shared": "workspace:*",
+    "@dsh-lab/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

@@ -1,6 +1,6 @@
 /**
  * /dlab RPC channel dispatch for the browser half. The './rpc' row registers
- * `ctx.connection.rpc.handle('/dlab', dispatch, { authority: 'loopback' })`.
+ * `ctx.connection.rpc.handle('/dsh-lab', dispatch, { authority: 'loopback' })`.
  * Envelope follows the connection-rpc standard:
  *   { ok: true, value } | { ok: false, error: { code, message } }
  */
@@ -9,7 +9,7 @@ import type { LabService } from './index.js'
 
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
 
-const RPC_CHANNEL = '/dlab'
+const RPC_CHANNEL = '/dsh-lab'
 
 type RpcResult<T> = ConnectionRpcResult<T>
 

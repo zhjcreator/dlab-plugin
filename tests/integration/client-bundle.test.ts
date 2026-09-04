@@ -90,7 +90,7 @@ describe('lab-client browser bundle', () => {
   it('registers through window.__ModuleLoader__ with the package id', () => {
     const { loaded } = loadBundle()
     expect(loaded).toHaveLength(1)
-    expect(loaded[0]!.id).toBe('@dlab/lab-client')
+    expect(loaded[0]!.id).toBe('@dsh-lab/client')
     expect(typeof loaded[0]!.factory).toBe('function')
   })
 
@@ -128,7 +128,7 @@ describe('lab-client browser bundle', () => {
     ctx._slotInjects.find((s) => s.key === 'conversation.session.header.actions')!.cb()
     expect(ctx._registrations).toHaveLength(1)
     const reg = ctx._registrations[0]!
-    expect(reg.spec.id).toBe('dlab-lab')
+    expect(reg.spec.id).toBe('dsh-lab')
     expect(reg.spec.order).toBe(30)
     // the injected props carry the plugin ctx
     const props = reg.spec.inject()
@@ -169,7 +169,7 @@ describe('lab-client browser bundle', () => {
     ;(ctx as { betterSidebar?: unknown }).betterSidebar = service
     sub.cb(ctx)
     expect(tabs).toHaveLength(1)
-    expect(tabs[0]!.id).toBe('dlab:lab')
+    expect(tabs[0]!.id).toBe('dsh-lab:lab')
     expect(tabs[0]!.single).toBe(true)
     // tab component renders with TabComponentProps.ctx
     const el = tabs[0]!.component({ ctx, tab: {}, visible: true })

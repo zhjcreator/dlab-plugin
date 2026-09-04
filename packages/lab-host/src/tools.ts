@@ -15,7 +15,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
-export const name = 'dlab-lab-tools'
+export const name = 'dsh-lab-tools'
 export const inject = ['lab', 'tools']
 
 function jsonRender(_args: unknown, value: unknown): ContentBlock[] {

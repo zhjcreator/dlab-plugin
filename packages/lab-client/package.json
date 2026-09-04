@@ -1,5 +1,5 @@
 {
-  "name": "@dlab/lab-client",
+  "name": "@dsh-lab/client",
   "version": "0.1.0",
   "private": true,
   "description": "DSH browser-surface bundle for the Deep Learning Lab — Lab panel as a better-sidebar tab (when present) with a standalone header-button fallback",
@@ -34,7 +34,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dlab/shared": "workspace:*"
+    "@dsh-lab/shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
