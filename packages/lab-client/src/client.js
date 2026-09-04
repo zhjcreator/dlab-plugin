@@ -363,36 +363,6 @@ window.__ModuleLoader__.load({
 			['lab_solution_diff', '"对比 agm-cosine 和 main"'],
 		];
 
-		function AgentRef() {
-			return h('div', {
-				style: {
-					padding: '8px 12px', borderTop: '1px solid ' + C.bd,
-					background: C.nested,
-				},
-			},
-				h('div', {
-					style: { fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.tx2, marginBottom: '4px' },
-				}, '🤖 Agent commands'),
-				h('div', {
-					style: { display: 'flex', flexWrap: 'wrap', gap: '3px' },
-				},
-					AGENT_TOOLS.map(function (t) {
-						return h('span', {
-							key: t,
-							style: {
-								fontSize: '9px', fontFamily: 'ui-monospace,monospace',
-								padding: '1px 5px', borderRadius: '3px',
-								background: 'rgba(127,127,127,0.08)',
-								border: '1px solid rgba(127,127,127,0.12)',
-								color: C.tx2,
-							},
-						}, t);
-					})),
-				h('div', {
-					style: { fontSize: '9px', color: C.tx2, marginTop: '4px', lineHeight: 1.4 },
-				}, 'All operations are performed by the agent via these tools.'));
-		}
-
 		// ── main panel (read-only dashboard) ─────────────────────────────────
 
 		function LabPanel(props) {
@@ -471,7 +441,43 @@ window.__ModuleLoader__.load({
 						activeCount, ' solutions · ', d.runs.length, ' runs',
 						runningCount > 0 ? ' · ' + runningCount + ' running' : ''),
 					),
+					h('button', {
+						style: {
+							font: 'inherit', fontSize: '11px', fontWeight: 700,
+							width: '20px', height: '20px', borderRadius: '50%',
+							background: 'rgba(127,127,127,0.12)',
+							border: 'none', color: C.tx2, cursor: 'pointer',
+							display: 'flex', alignItems: 'center', justifyContent: 'center',
+							flexShrink: 0,
+						},
+						onClick: function () { setHelp(!help); },
+						title: 'Agent commands help',
+					}, '?'),
 				),
+
+				// help overlay (toggleable)
+				help ? h('div', {
+					style: {
+						padding: '10px 12px', background: C.nested,
+						borderBottom: '1px solid ' + C.bd, flexShrink: 0,
+					},
+				},
+					h('div', {
+						style: { fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.tx2, marginBottom: '5px' },
+					}, '\uD83E\uDD16 Agent commands — tell the agent:'),
+					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+						AGENT_HELP.map(function (cmd) {
+							return h('div', {
+								key: cmd[0],
+								style: { fontSize: '10px', color: C.tx, lineHeight: 1.5, display: 'flex', gap: '6px' },
+							},
+								h('span', { style: { fontFamily: 'ui-monospace,monospace', fontSize: '9px', color: C.brand, fontWeight: 600, minWidth: '140px' } }, cmd[0]),
+								h('span', { style: { color: C.tx2 } }, cmd[1]));
+						})),
+					h('div', {
+						style: { fontSize: '9px', color: C.tx2, marginTop: '6px', fontStyle: 'italic' },
+					}, 'All operations are performed by the agent during conversation.'),
+				) : null,
 
 				// content (scrollable)
 				h('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto' } },
@@ -484,8 +490,7 @@ window.__ModuleLoader__.load({
 					h(RunsList, { runs: d.runs }),
 				),
 
-				// agent reference footer
-				h(AgentRef));
+			);
 		}
 
 		// ── header button ────────────────────────────────────────────────────
