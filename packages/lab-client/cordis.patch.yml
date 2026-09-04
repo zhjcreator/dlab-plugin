@@ -1,10 +1,15 @@
-# dsh-lab client composition bundle. Provides the browser-half rows that make
-# the Lab UI reachable inside the running dsh web app. Consumed via the
-# dsh.client roster; the actual browser entry lives in src/client.ts and is
-# wired by the modules node scanning this package's dsh.client injectable.
+# dsh-lab client composition bundle.
+#
+# A package becomes a browser-half bundle through its package.json
+# `dsh.client: { platform: "web" }` declaration (see resolveMeta in
+# dsh-client-modules) — NOT through a row key. This patch layer only inserts
+# the host-side row that keeps the package mounted so the modules scanner can
+# pick up its client half once package.json declares one.
+#
+# NOTE: @dlab/lab-client does not yet declare `dsh.client` in package.json;
+# that lands in Phase 2 together with the real slot UI. This layer is inert
+# until then.
 
 - insert:
     - id: dlab-client
       name: '@dlab/lab-client'
-      dsh:
-        client: true

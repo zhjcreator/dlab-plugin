@@ -34,8 +34,16 @@ export class SqliteStore implements StorePort {
   // ── projects ─────────────────────────────────────────────────────────────
 
   getProject(): Promise<Project | undefined> {
-    const row = this.db.prepare('SELECT * FROM projects LIMIT 1').get() as Project | undefined
-    return Promise.resolve(row)
+    const row = this.db.prepare('SELECT * FROM projects LIMIT 1').get() as Record<string, unknown> | undefined
+    if (!row) return Promise.resolve(undefined)
+    return Promise.resolve({
+      id: row.id as string,
+      name: row.name as string,
+      rootPath: row.root_path as string,
+      mainSolutionId: (row.main_solution_id as string | null) ?? undefined,
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+    })
   }
 
   async createProject(input: { name: string; rootPath: string }): Promise<Project> {
@@ -59,19 +67,46 @@ export class SqliteStore implements StorePort {
 
   // ── solutions ────────────────────────────────────────────────────────────
 
+  /** Map a raw snake_case DB row to the camelCase domain object. */
+  private static rowToSolution(row: Record<string, unknown>): Solution {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      slug: row.slug as string,
+      name: row.name as string,
+      description: (row.description as string | null) ?? undefined,
+      hypothesis: (row.hypothesis as string | null) ?? undefined,
+      conclusion: (row.conclusion as string | null) ?? undefined,
+      role: row.role as Solution['role'],
+      status: row.status as Solution['status'],
+      branch: row.branch as string,
+      worktreePath: (row.worktree_path as string | null) ?? undefined,
+      workspaceId: (row.workspace_id as string | null) ?? undefined,
+      parentSolutionId: (row.parent_solution_id as string | null) ?? undefined,
+      forkCommit: (row.fork_commit as string | null) ?? undefined,
+      headCommit: row.head_commit as string,
+      mergedIntoSolutionId: (row.merged_into_solution_id as string | null) ?? undefined,
+      mergeCommit: (row.merge_commit as string | null) ?? undefined,
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+      archivedAt: (row.archived_at as number | null) ?? undefined,
+      mergedAt: (row.merged_at as number | null) ?? undefined,
+    }
+  }
+
   listSolutions(): Promise<Solution[]> {
-    const rows = this.db.prepare('SELECT * FROM solutions ORDER BY created_at').all() as Solution[]
-    return Promise.resolve(rows)
+    const rows = this.db.prepare('SELECT * FROM solutions ORDER BY created_at').all() as Record<string, unknown>[]
+    return Promise.resolve(rows.map((r) => SqliteStore.rowToSolution(r)))
   }
 
   getSolution(id: string): Promise<Solution | undefined> {
-    const row = this.db.prepare('SELECT * FROM solutions WHERE id = ?').get(id) as Solution | undefined
-    return Promise.resolve(row)
+    const row = this.db.prepare('SELECT * FROM solutions WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    return Promise.resolve(row ? SqliteStore.rowToSolution(row) : undefined)
   }
 
   getSolutionBySlug(slug: string): Promise<Solution | undefined> {
-    const row = this.db.prepare('SELECT * FROM solutions WHERE slug = ?').get(slug) as Solution | undefined
-    return Promise.resolve(row)
+    const row = this.db.prepare('SELECT * FROM solutions WHERE slug = ?').get(slug) as Record<string, unknown> | undefined
+    return Promise.resolve(row ? SqliteStore.rowToSolution(row) : undefined)
   }
 
   upsertSolution(solution: Solution): Promise<void> {
@@ -132,7 +167,41 @@ export class SqliteStore implements StorePort {
     return Promise.resolve()
   }
 
+  setMainSolution(projectId: string, solutionId: string): Promise<void> {
+    this.db
+      .prepare('UPDATE projects SET main_solution_id = ?, updated_at = ? WHERE id = ?')
+      .run(solutionId, Date.now(), projectId)
+    return Promise.resolve()
+  }
+
   // ── runs ─────────────────────────────────────────────────────────────────
+
+  /** Map a raw snake_case runs row to the camelCase domain object. */
+  private static rowToRun(row: Record<string, unknown>): import('@dlab/shared').ExperimentRun {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      solutionId: row.solution_id as string,
+      snapshotCommit: row.snapshot_commit as string,
+      sourceHeadCommit: row.source_head_commit as string,
+      status: row.status as import('@dlab/shared').RunStatus,
+      title: (row.title as string | null) ?? undefined,
+      description: (row.description as string | null) ?? undefined,
+      runProfileId: (row.run_profile_id as string | null) ?? undefined,
+      command: JSON.parse((row.command_json as string) ?? '[]') as string[],
+      resources: JSON.parse((row.resources_json as string) ?? '{}') as import('@dlab/shared').RunResourceRequest,
+      environmentFingerprint: (row.environment_fingerprint as string | null) ?? 'env:unknown',
+      runDir: row.run_dir as string,
+      worktreePath: (row.worktree_path as string | null) ?? undefined,
+      pid: (row.pid as number | null) ?? undefined,
+      pgid: (row.pgid as number | null) ?? undefined,
+      exitCode: (row.exit_code as number | null) ?? undefined,
+      createdAt: row.created_at as number,
+      startedAt: (row.started_at as number | null) ?? undefined,
+      finishedAt: (row.finished_at as number | null) ?? undefined,
+      tags: [],
+    }
+  }
 
   listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dlab/shared').ExperimentRun[]> {
     let sql = 'SELECT * FROM runs'
@@ -148,13 +217,13 @@ export class SqliteStore implements StorePort {
     }
     if (where.length) sql += ' WHERE ' + where.join(' AND ')
     sql += ' ORDER BY created_at DESC'
-    const rows = this.db.prepare(sql).all(params) as import('@dlab/shared').ExperimentRun[]
-    return Promise.resolve(rows)
+    const rows = this.db.prepare(sql).all(params) as Record<string, unknown>[]
+    return Promise.resolve(rows.map((r) => SqliteStore.rowToRun(r)))
   }
 
   getRun(id: string): Promise<import('@dlab/shared').ExperimentRun | undefined> {
-    const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as import('@dlab/shared').ExperimentRun | undefined
-    return Promise.resolve(row)
+    const row = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    return Promise.resolve(row ? SqliteStore.rowToRun(row) : undefined)
   }
 
   upsertRun(run: import('@dlab/shared').ExperimentRun): Promise<void> {

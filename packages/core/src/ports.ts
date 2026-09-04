@@ -23,6 +23,10 @@ export interface GitPort {
   initBare(): Promise<void>
   /** Import an existing non-bare repo by cloning it into gitDir (does not delete the source). */
   importFrom(sourceRepo: string): Promise<void>
+  /** Symbolic HEAD branch of the bare repo, or undefined for an empty repo. */
+  currentHeadBranch(): Promise<string | undefined>
+  /** Create branch with a single empty-tree commit (bootstrap for empty repos). */
+  bootstrapBranchWithEmptyCommit(branch: string, message: string): Promise<string>
 
   branchExists(branch: string): Promise<boolean>
   createBranch(branch: string, startPoint: string): Promise<void>
@@ -58,6 +62,8 @@ export interface StorePort {
   getSolution(id: string): Promise<import('@dlab/shared').Solution | undefined>
   getSolutionBySlug(slug: string): Promise<import('@dlab/shared').Solution | undefined>
   upsertSolution(solution: import('@dlab/shared').Solution): Promise<void>
+  /** Record which solution is the project's main (set once at init). */
+  setMainSolution(projectId: string, solutionId: string): Promise<void>
 
   listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dlab/shared').ExperimentRun[]>
   getRun(id: string): Promise<import('@dlab/shared').ExperimentRun | undefined>

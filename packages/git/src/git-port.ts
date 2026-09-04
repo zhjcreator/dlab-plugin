@@ -65,6 +65,27 @@ export class LocalGitPort implements GitPort {
     await this.run(['clone', '--bare', sourceRepo, this.gitDir])
   }
 
+  async currentHeadBranch(): Promise<string | undefined> {
+    try {
+      const { stdout } = await this.run(['symbolic-ref', '--short', 'HEAD'])
+      const name = stdout.trim()
+      return name || undefined
+    } catch {
+      return undefined // empty repository: HEAD points at an unborn branch
+    }
+  }
+
+  async bootstrapBranchWithEmptyCommit(branch: string, message: string): Promise<string> {
+    // git's well-known empty tree object
+    const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+    const { stdout: commitOut } = await this.run(['commit-tree', EMPTY_TREE, '-m', message])
+    const commit = commitOut.trim()
+    await this.run(['update-ref', `refs/heads/${branch}`, commit])
+    // point HEAD at the new branch so later worktree adds resolve it
+    await this.run(['symbolic-ref', 'HEAD', `refs/heads/${branch}`])
+    return commit
+  }
+
   async branchExists(branch: string): Promise<boolean> {
     const { stdout } = await this.run(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])
       .then(() => ({ stdout: 'yes' }))
@@ -175,17 +196,30 @@ export class LocalGitPort implements GitPort {
     targetBranch: string,
     sourceBranch: string,
   ): Promise<{ conflictFiles: string[]; clean: boolean }> {
-    // `git merge-tree --write-tree <target> <source>` reports conflicts on
-    // stderr / exit code without touching any worktree.
+    // Modern form (git >= 2.38): `merge-tree --write-tree <target> <source>`
+    // exits non-zero with conflict info on failure, zero on a clean merge.
     try {
-      const { stdout } = await this.run(['merge-tree', '--write-tree', targetBranch, sourceBranch])
-      // On success stdout carries the resulting tree oid; no conflicts.
+      await this.run(['merge-tree', '--write-tree', targetBranch, sourceBranch])
       return { conflictFiles: [], clean: true }
     } catch (error) {
-      const msg = String((error as { message?: string })?.message ?? error)
-      const conflictFiles = parseMergeTreeConflicts(msg)
-      return { conflictFiles, clean: false }
+      const e = error as { message?: string; stdout?: string; stderr?: string }
+      const text = [e.message, e.stdout, e.stderr].filter(Boolean).join('\n')
+      // Unknown option / bad revision → old git without --write-tree support:
+      // fall through to the legacy 3-arg form below. Anything else that looks
+      // like a real conflict report is returned directly.
+      if (!text.includes('unknown') && !text.includes('usage:') && !text.includes('Not a valid object')) {
+        const conflictFiles = parseMergeTreeConflicts(text)
+        return { conflictFiles, clean: conflictFiles.length === 0 }
+      }
     }
+
+    // Legacy form (git < 2.38): `merge-tree <base> <branch1> <branch2>` prints
+    // the hypothetical merge; conflicts appear as 'changed in both' /
+    // 'added in both' sections containing +<<<<<<< markers.
+    const base = await this.mergeBase(targetBranch, sourceBranch)
+    const { stdout } = await this.run(['merge-tree', base, targetBranch, sourceBranch])
+    const conflictFiles = parseLegacyMergeTree(stdout)
+    return { conflictFiles, clean: conflictFiles.length === 0 }
   }
 
   async mergeInWorktree(path: string, targetBranch: string, sourceBranch: string): Promise<string> {
@@ -241,14 +275,49 @@ function parseMergeTreeConflicts(message: string): string[] {
     const m = /CONFLICT \(.*?\): Merge conflict in (.+)$/.exec(line.trim())
     if (m?.[1]) files.add(m[1])
   }
-  // fallback: lines that name a file with "<<<<<<<" markers
-  if (files.size === 0) {
-    for (const line of message.split('\n')) {
-      if (line.includes('<<<<<<<') || line.includes('=======') || line.includes('>>>>>>>')) {
-        const nearby = line.trim()
-        if (nearby) files.add(nearby.slice(0, 80))
-      }
+  return [...files]
+}
+
+/**
+ * Parse the legacy 3-arg `git merge-tree <base> <b1> <b2>` output. A conflict
+ * appears as a section header like `changed in both` / `added in both` /
+ * `removed in both`, followed by `our`/`their` blob lines naming the file.
+ * Only sections that actually contain a conflict marker are real conflicts;
+ * clean both-sides changes produce no `+<<<<<<<` line.
+ */
+function parseLegacyMergeTree(stdout: string): string[] {
+  const files = new Set<string>()
+  const lines = stdout.split('\n')
+  let sectionConflict = false
+  let sectionPaths: string[] = []
+  const flush = () => {
+    if (sectionConflict) for (const p of sectionPaths) files.add(p)
+    sectionConflict = false
+    sectionPaths = []
+  }
+  for (const raw of lines) {
+    const line = raw.trimEnd()
+    if (/^(changed|added|removed) in (both|remote|local)/.test(line)) {
+      flush()
+      continue
+    }
+    // blob lines: "  our    100644 <sha> <path>"
+    const m = /^  (?:our|their|result)\s+\d+ [0-9a-f]+ (.+)$/.exec(line)
+    if (m?.[1]) {
+      sectionPaths.push(m[1])
+      continue
+    }
+    // section starts after the blob lines with the diff; a conflict marker
+    // inside the diff body marks this section as a conflict
+    if (line.startsWith('+<<<<<<<')) {
+      sectionConflict = true
+      continue
+    }
+    // a new file section begins at the next "added in"/"merged" header
+    if (/^(merged|added in (remote|local))/.test(line)) {
+      flush()
     }
   }
+  flush()
   return [...files]
 }
