@@ -12,17 +12,20 @@
       "default": "./lib/index.js"
     }
   },
-  "files": ["lib", "src/schema.sql"],
+  "files": [
+    "lib",
+    "src/schema.sql"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/schema.sql lib/schema.sql",
     "test": "vitest run"
   },
   "dependencies": {
     "@dlab/shared": "workspace:*",
-    "@dlab/core": "workspace:*"
+    "@dlab/core": "workspace:*",
+    "better-sqlite3": "^11.5.0"
   },
   "devDependencies": {
-    "better-sqlite3": "^11.5.0",
     "@types/better-sqlite3": "^7.6.11",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
