@@ -23,6 +23,7 @@ function fail<T = never>(code: string, message: string): RpcResult<T> {
 
 type Endpoint =
   | 'project.get'
+  | 'project.init'
   | 'solutions.list'
   | 'solutions.get'
   | 'solutions.fork'
@@ -50,6 +51,9 @@ export async function dispatch(
     switch (endpoint as Endpoint) {
       case 'project.get':
         return ok({ name: service.projectName, root: service.root })
+
+      case 'project.init':
+        return ok(await service.init())
 
       case 'solutions.list':
         return ok({ solutions: await service.solutions.list() })

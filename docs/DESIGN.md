@@ -1221,6 +1221,26 @@ Solutions | Experiments | Compare | Resources | Environment
 
 ---
 
+### 26.1 浏览器半与 dsh-better-sidebar 的兼容（Phase 4 落地）
+
+lab-client 与 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 双模兼容——**有它则集成、无它则自立**，且它永远不是硬依赖：
+
+| 场景 | 行为 |
+| ---- | ---- |
+| better-sidebar **已安装** | `ctx.inject(['betterSidebar'], …)` 子插件调用 `ctx.betterSidebar.registerTab({id:'dlab:lab', single:true, …})` 把 Lab 面板注册进右侧栏；服务消失（HMR/卸载）时注册随 fiber 自动撤销 |
+| better-sidebar **未安装** | 会话头部的「🧪 DLab」按钮（`conversation.session.header.actions` slot，常驻注册）打开一个 fixed 浮层面板 |
+| 两者**同时**可用 | 头部按钮优先调用 `betterSidebar.openTab({type:'dlab:lab'})` 打开侧边栏 tab（浮层不出现） |
+
+实现要点：
+
+* better-sidebar **不进** `dsh.client.inject`（那是硬依赖列表，缺席会导致 bundle 永不加载）；tab 注册走 `ctx.inject(['betterSidebar'], cb)` 子插件——服务出现即激活、消失即 dispose，天然 HMR 安全。
+* bundle 为手写的 `window.__ModuleLoader__.load({id, factory})` 格式（与 better-sidebar 的 tsdown 产物同构），`require('react')`/`require('react-dom')` 由模块系统提供，无打包器参与；宿主半是 no-op 行，仅为让 client-modules 扫描器发现包的 `dsh.client` 声明。
+* `dsh.client.inject = ['@deepseek-ai/dsh-client-connection', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-conversation']`——connection 提供 `/dlab` RPC 通道，后两者提供 slots 服务与 header.actions 槽位树。
+* 面板单组件 `LabPanel` 双模共用；数据全部经 `/dlab` RPC（5s 轮询 + 操作后刷新）；未初始化的 lab 显示 Initialize 按钮（`project.init` 端点）。
+* 样式只继承 currentColor/透明度，不硬编码主题色，适配亮暗主题。
+
+---
+
 ## 27. MVP 开发优先级
 
 ### Phase 1 — Core + CLI（**先做，先稳定**）

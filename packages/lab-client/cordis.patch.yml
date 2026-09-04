@@ -1,14 +1,16 @@
 # dsh-lab client composition bundle.
 #
-# A package becomes a browser-half bundle through its package.json
-# `dsh.client: { platform: "web" }` declaration (see resolveMeta in
-# dsh-client-modules) — NOT through a row key. This patch layer only inserts
-# the host-side row that keeps the package mounted so the modules scanner can
-# pick up its client half once package.json declares one.
+# The host row below mounts the package's (no-op) host half so the client-
+# modules scanner discovers its `dsh.client` declaration and serves the
+# browser bundle at /plugins/@dlab/lab-client/client.js.
 #
-# NOTE: @dlab/lab-client does not yet declare `dsh.client` in package.json;
-# that lands in Phase 2 together with the real slot UI. This layer is inert
-# until then.
+# Browser half (lib/client.js, hand-written module bundle):
+#   - with dsh-better-sidebar present: registers a "DLab" tab in the right
+#     sidebar via ctx.betterSidebar.registerTab (a ctx.inject sub-plugin that
+#     activates/disposes with the service — never a hard dependency)
+#   - always: a "🧪" button in conversation.session.header.actions that opens
+#     the sidebar tab when available, or a standalone overlay panel otherwise
+#   - data via the /dlab Connection RPC channel served by @dlab/lab-host
 
 - insert:
     - id: dlab-client
