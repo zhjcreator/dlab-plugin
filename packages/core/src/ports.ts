@@ -25,8 +25,8 @@ export interface GitPort {
   importFrom(sourceRepo: string): Promise<void>
   /** Symbolic HEAD branch of the bare repo, or undefined for an empty repo. */
   currentHeadBranch(): Promise<string | undefined>
-  /** Create branch with a single empty-tree commit (bootstrap for empty repos). */
-  bootstrapBranchWithEmptyCommit(branch: string, message: string): Promise<string>
+  /** Create branch with one commit over the given files (bootstrap for empty repos). */
+  bootstrapBranchWithEmptyCommit(branch: string, message: string, files?: Record<string, string>): Promise<string>
 
   branchExists(branch: string): Promise<boolean>
   createBranch(branch: string, startPoint: string): Promise<void>

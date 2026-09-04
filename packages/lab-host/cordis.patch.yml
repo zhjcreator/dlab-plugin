@@ -1,41 +1,31 @@
 # dsh-lab host composition bundle. Applied as the host-plane rows of the
-# profile; rows here provide services / registers tools / wires RPC. The
-# client rows live in @dlab/lab-client and the per-session tool grant lives in
-# @dlab/preset-lab.
+# profile. Each row is a separate fiber with its own inject declaration so
+# HMR can replace them individually:
+#
+#   lab-service       → provides ctx.lab (needs workspaceRegistry)
+#   lab-tools         → lab_* model tools (needs lab + tools)
+#   lab-rpc           → /dlab Connection RPC channel (needs lab + connection)
+#   lab-shell-env     → DSH_LAB_* shell variables (needs lab + shellEnv)
+#   lab-system-prompt → lab:context prompt section (needs lab + systemPrompt)
+#
+# solutionRoot must point at the user's lab root (the directory holding
+# solutions/, experiments/, .dsh-lab/).
 
 - insert:
-    # Internal wiring rows: each is a config entry of the same lab-host plugin
-    # module; distinct ids let HMR replace them individually.
-    - id: lab-host
-      name: '@dlab/lab-host'
-
-    # The concrete ports (git / store / runner / scheduler) are provided as
-    # internal services; the LabService row injects them by name so one
-    # process gets exactly one instance. The actual service keys registered
-    # by the host module: dlabGit, dlabStore, dlabRunner, dlabScheduler,
-    # dlabWorkspaceBridge and lab.
-
     - id: lab-service
       name: '@dlab/lab-host'
       config:
-        role: service
+        solutionRoot: /home2/zhanghanjin/WorkSpace/dsh-scholar
+        projectName: dsh-scholar
 
     - id: lab-tools
-      name: '@dlab/lab-host'
-      config:
-        role: tools
+      name: '@dlab/lab-host/tools'
 
     - id: lab-rpc
-      name: '@dlab/lab-host'
-      config:
-        role: rpc
+      name: '@dlab/lab-host/rpc'
 
     - id: lab-shell-env
-      name: '@dlab/lab-host'
-      config:
-        role: shell-env
+      name: '@dlab/lab-host/shell-env'
 
     - id: lab-system-prompt
-      name: '@dlab/lab-host'
-      config:
-        role: system-prompt
+      name: '@dlab/lab-host/system-prompt'

@@ -8,7 +8,7 @@
  * merge internals are filled in next.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { resolve } from 'node:path'
 import type { GitPort } from '@dlab/core'
@@ -33,14 +33,20 @@ export class LocalGitPort implements GitPort {
   }
 
   /** Run git inside the bare repo with an optional work-tree override. */
-  private async run(args: string[], opts: { cwd?: string } = {}): Promise<RunResult> {
+  private async run(
+    args: string[],
+    opts: { cwd?: string; input?: string } = {},
+  ): Promise<RunResult> {
     const full = [
       ...(opts.cwd ? [] : ['--git-dir', this.gitDir]),
       ...(opts.cwd ? ['-C', opts.cwd] : []),
       ...args,
     ]
     try {
-      const { stdout, stderr } = await execFileAsync('git', full, { maxBuffer: 64 * 1024 * 1024 })
+      const { stdout, stderr } = await execFileAsync('git', full, {
+        maxBuffer: 64 * 1024 * 1024,
+        ...(opts.input !== undefined ? { input: opts.input } : {}),
+      })
       return { stdout: stdout.toString(), stderr: stderr.toString() }
     } catch (error) {
       const e = error as { stdout?: Buffer | string; stderr?: Buffer | string; code?: number }
@@ -75,10 +81,48 @@ export class LocalGitPort implements GitPort {
     }
   }
 
-  async bootstrapBranchWithEmptyCommit(branch: string, message: string): Promise<string> {
-    // git's well-known empty tree object
-    const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
-    const { stdout: commitOut } = await this.run(['commit-tree', EMPTY_TREE, '-m', message])
+  /**
+   * Run git with content on stdin. execFile's `input` option is silently
+   * ignored (stdin stays an open pipe), so this uses spawn directly.
+   */
+  private runWithStdin(args: string[], input: string): Promise<RunResult> {
+    const full = ['--git-dir', this.gitDir, ...args]
+    return new Promise<RunResult>((resolve, reject) => {
+      const child = spawn('git', full, { stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (d: Buffer) => (stdout += d.toString()))
+      child.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
+      child.on('error', (err: Error) => reject(err))
+      child.on('close', (code: number | null) => {
+        if (code === 0) resolve({ stdout, stderr })
+        else reject(new Error(`git ${args.join(' ')} failed: ${stderr.trim() || stdout.trim()}`))
+      })
+      child.stdin.write(input)
+      child.stdin.end()
+    })
+  }
+
+  async bootstrapBranchWithEmptyCommit(
+    branch: string,
+    message: string,
+    files: Record<string, string> = {},
+  ): Promise<string> {
+    // build a root tree from the given files via plumbing
+    let tree: string
+    const entries: string[] = []
+    for (const [path, content] of Object.entries(files)) {
+      const blob = await this.runWithStdin(['hash-object', '-w', '--stdin'], content)
+      entries.push(`100644 blob ${blob.stdout.trim()}\t${path}`)
+    }
+    if (entries.length > 0) {
+      const mktree = await this.runWithStdin(['mktree'], entries.join('\n'))
+      tree = mktree.stdout.trim()
+    } else {
+      // git's well-known empty tree object
+      tree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+    }
+    const { stdout: commitOut } = await this.run(['commit-tree', tree, '-m', message])
     const commit = commitOut.trim()
     await this.run(['update-ref', `refs/heads/${branch}`, commit])
     // point HEAD at the new branch so later worktree adds resolve it

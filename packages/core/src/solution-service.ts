@@ -99,7 +99,9 @@ export class SolutionService {
       } else {
         // empty repo: bootstrap an initial commit via plumbing so the
         // worktree has something to check out
-        await this.git.bootstrapBranchWithEmptyCommit(mainBranch, `[dsh-lab] init: ${name}`)
+        await this.git.bootstrapBranchWithEmptyCommit(mainBranch, `[dsh-lab] init: ${name}`, {
+          'README.md': `# ${name}\n`,
+        })
       }
     }
 
