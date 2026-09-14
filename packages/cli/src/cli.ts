@@ -31,7 +31,7 @@ export function makeConfig(root: string, projectName: string): LabConfig {
     mainBranch: 'main',
     docsDir: 'docs',
     trackDir: '.dlab',
-    docLinkPath: 'local/docs',
+    docLinkPath: 'docs',
     docsVersionRef: 'refs/dsh/docs',
   }
 }
@@ -341,8 +341,8 @@ export async function runCli(argv: string[]): Promise<void> {
 
   docs
     .command('migrate <solution>')
-    .description('move documents that live inside a solution into the shared docs directory')
-    .option('--path <dir>', 'directory inside the solution (default: docs)')
+    .description('move a solution private notes into the shared docs directory')
+    .option('--path <dir>', 'directory inside the solution (default: notes)')
     .option('--apply', 'perform the migration (default: print the plan only)')
     .option('--move', 'also remove the migrated files from the solution worktree')
     .action(async (solution: string, opts: { path?: string; apply?: boolean; move?: boolean }) => {

@@ -963,6 +963,43 @@ jobs.start({
 
 ---
 
+## 18.2 文档分区（v0.1.4 起）
+
+**问题**：每个 solution 都是一个 git worktree，写在 worktree 里的文档在 fork 那一刻被
+复制，之后各自冻结。公共知识（章程、路线图、基线引用、跨实验经验）于是分叉成「每个实验
+一份过时拷贝」，还会通过 merge 回流冲突。
+
+**规则**：
+
+| 位置 | 内容 | 版本化 |
+| --- | --- | --- |
+| `<root>/docs/` | **公共**：章程、路线图、基线引用、跨实验经验 | 是，`refs/dsh/docs`（根目录不在任何 worktree 内，需显式快照） |
+| `<root>/docs/local/<slug>/` | 从某个 solution 提升出来的结论 | 是，同一 ref；archive 时自动写入 |
+| `<root>/docs/.dlab/` | 生成物：promotion 快照 + 索引状态 | 否（gitignore，且从快照 pathspec 中排除） |
+| `<solution>/notes/` | **私有**：当前实验的过程记录 | 随该 solution 分支 |
+| `<solution>/docs` | 指向 `<root>/docs` 的**链接** | 仅链接本身 |
+
+关键点：
+
+* **同名同义**：无论站在项目根还是任意 solution，`docs/` 都是同一份公共文档。链接在
+  worktree 内的相对路径恒为 `docs -> ../../docs`，因此「同一棵 git tree 在不同 worktree
+  里含义相同」，不会出现谁 materialize 谁说了算的问题。
+* **checkpoint 不会把公共文档复制进分支**：git 从不跟随符号链接目录，`git add -A`
+  直接跳过它（有测试断言）。
+* **merge 用 `-X ours`**：公共文档以集成分支（main）为准，任何 promote 都不可能把主线
+  文档回退；代码冲突仍照常拒绝合并。
+* **archive 自动 promote**：worktree 消失前把 `notes/` 镜像到 `docs/local/<slug>/` 并写
+  快照，知识不随归档丢失。
+* **迁移**：`docs adopt` 让既有项目接入（建根 docs/、补链接、打版本）；`docs migrate`
+  把原本写在 solution 里的文档搬到公共根（先出计划，`--apply` 才执行）。禁止 `--move`
+  作用在链接上——否则会顺着链接删掉唯一的正本。
+
+实现：`packages/core/src/docs-service.ts`（布局/读写/提升/迁移/版本）、
+`packages/git/src/git-port.ts` 的 `commitPathSnapshot` + `logRef`（根目录不在 worktree
+内，只能 plumbing 快照）、`projects.docs` 列（schema v2 迁移）。
+
+---
+
 ## 19. Resource Model & GPU Reservation
 
 ```ts

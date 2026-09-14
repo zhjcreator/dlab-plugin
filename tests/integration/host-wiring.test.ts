@@ -292,7 +292,7 @@ describe('host wiring: LabService on real Cordis', () => {
     // the shared docs directory is the project-root docs/ dir, reached from a
     // solution through the identical link path
     expect(resolved.DSH_LAB_DOCS).toBe(join(labRoot, 'docs'))
-    expect(resolved.DSH_LAB_DOCS_LINK).toBe('local/docs')
+    expect(resolved.DSH_LAB_DOCS_LINK).toBe('docs')
   })
 
   it('systemPrompt section renders the live lab context', async () => {

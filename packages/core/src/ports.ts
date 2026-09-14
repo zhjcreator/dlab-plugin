@@ -174,11 +174,12 @@ export interface LabConfig {
   /** Generated, machine-written area *inside* {@link docsDir}: mirrors + snapshots. */
   trackDir: string // '.dlab'
   /**
-   * Relative path (inside a solution worktree) of the doc link. Its parent
-   * must itself be a real directory in every solution — the link is always
-   * `solutions/<slug>/local/docs`, so nothing can shadow it.
+   * Relative path (inside a solution worktree) of the doc link. It is the
+   * shared directory's own name, so `docs/` always means the project-wide
+   * documents whether you stand in the project root or in any solution;
+   * private experiment notes live in `notes/`.
    */
-  docLinkPath: string // 'local/docs'
+  docLinkPath: string // 'docs'
   /** Ref holding the shared-docs history (root docs/ is not in a worktree). */
   docsVersionRef: string // 'refs/dsh/docs'
 }

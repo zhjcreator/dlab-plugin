@@ -79,6 +79,42 @@ Run it first and promote only what succeeded, or pass allowUnevidenced to overri
   counts (`runs` / `succeeded` / `failed` / `live` / `forked`) the gate and the
   panel's **Promotion** block read.
 
+## Shared documents live once, at the project root
+
+Every solution is a git worktree, so a document kept inside one is copied at
+fork time and then frozen — shared knowledge diverges into one stale copy per
+experiment and comes back through merges. The layout therefore splits documents
+by scope:
+
+| Where | What | Versioned |
+| ----- | ---- | --------- |
+| `<root>/docs/` | **shared**: charter, roadmap, baseline references, cross-cutting lessons | yes — `refs/dsh/docs` (the root is outside every worktree, so it is snapshotted explicitly) |
+| `<root>/docs/local/<slug>/` | conclusions promoted out of a solution | yes, same ref; mirrored on every archive |
+| `<root>/docs/.dlab/` | generated: snapshots + index state | no (git-ignored, excluded from the version snapshot) |
+| `<solution>/notes/` | **private** to one experiment | on that solution's branch |
+| `<solution>/docs` | a LINK to `<root>/docs` | the link only |
+
+`docs/` means the same thing wherever you stand: in the project root it is the
+directory, in any solution it is `docs -> ../../docs`. One physical copy, no
+per-experiment forks of shared knowledge.
+
+```bash
+dsh-lab docs layout                  # paths + per-solution link status
+dsh-lab docs list | read <path>      # inspect
+dsh-lab docs history                 # version commits (refs/dsh/docs)
+dsh-lab docs adopt                   # retrofit an existing project
+dsh-lab docs migrate <sol> [--apply] # move in-solution docs into the shared root
+dsh-lab docs promote <sol>           # keep a solution's conclusions
+dsh-lab docs repair                  # re-link worktrees
+```
+
+Agent-side equivalents: `lab_docs`, `lab_write_doc`, `lab_promote_docs`,
+`lab_migrate_docs`, with `DSH_LAB_DOCS` / `DSH_LAB_DOCS_LINK` in the shell
+environment and the rule stated in the lab prompt section. Promotions during
+`lab_archive_solution` are automatic, so archiving never loses what was learned.
+Merge uses `-X ours`, so a promotion can never revert the mainline's shared
+documents.
+
 ## Panel (read-only observation)
 
 The DLab page tab in the native right sidebar has three parts:
@@ -91,6 +127,8 @@ The DLab page tab in the native right sidebar has three parts:
   experiment is not buried under main's history), newest first, with a
   `n/N` variant ordinal inside graded groups; each run's detail shows the live
   **output tail** (stdout + stderr) via `runs.log`.
+* **Docs tab** — lists the project-wide documents (path, size, age) and
+  previews the selected one; read-only, writes go through the agent.
 * **Details** — always reachable back: a breadcrumb bar (`← Back · PRD ▸
   solution ▸ run`) sits under the header, and the detail header repeats
   `← Back` plus `solution →`. Titles fall back to a readable argv rendering

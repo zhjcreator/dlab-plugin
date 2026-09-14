@@ -26,8 +26,12 @@ import { solutionId } from '@dsh-lab/shared'
 import type { DocsService, PromoteDocsResult } from './docs-service.js'
 import type { GitPort, LabDeps, StorePort, WorkspacePort } from './ports.js'
 
-/** Local (per-experiment) notes a promotion mirrors into the shared docs. */
-const LOCAL_NOTE_DIRS = ['docs', 'notes', 'local/docs', 'results']
+/**
+ * Local (per-experiment) note directories a promotion mirrors into the shared
+ * docs. `docs/` is deliberately absent: inside a worktree it is the LINK to
+ * the shared directory, so copying it would only duplicate shared knowledge.
+ */
+const LOCAL_NOTE_DIRS = ['notes', 'reports', 'results']
 
 export class SolutionService {
   constructor(

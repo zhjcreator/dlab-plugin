@@ -316,10 +316,11 @@ export class DocsService {
     const worktree = this.solutionDir(solution)
 
     if (input.includeLocal !== false) {
-      const localDirs = ['docs', 'notes', join('local', 'docs')].filter((d) => {
-        if (d === this.config.docLinkPath) return false // the root link is not local
-        return existsSync(join(worktree, d))
-      })
+      // `docs/` inside a worktree is the LINK to the shared directory, never
+      // private: only genuinely local note directories are mirrored
+      const localDirs = ['notes', 'reports', 'results'].filter((d) =>
+        existsSync(join(worktree, d)),
+      )
       for (const dir of localDirs) {
         const files = this.walkFiles(join(worktree, dir))
         for (const file of files) {
@@ -335,7 +336,7 @@ export class DocsService {
     }
 
     for (const sharedPath of input.promote ?? []) {
-      for (const dir of ['docs', 'notes', join('local', 'docs')]) {
+      for (const dir of ['notes', 'reports', this.config.docLinkPath]) {
         const candidate = join(worktree, dir, sharedPath)
         if (existsSync(candidate)) {
           this.write(sharedPath, readFileSync(candidate, 'utf8'))
@@ -383,12 +384,12 @@ export class DocsService {
     prefix: string
   }> {
     const solution = await this.requireSolution(input.solutionId)
-    const rel = input.path ?? this.config.docsDir
+    const rel = input.path ?? 'notes'
     const source = join(this.solutionDir(solution), rel)
     const files = this.walkFiles(source)
-    // the standard solution docs dir maps onto the shared docs ROOT; any other
-    // directory keeps its own name so its origin stays visible
-    const prefix = rel === this.config.docsDir ? '' : rel
+    // a solution's documents map onto the shared docs ROOT (that is the whole
+    // point of the layout); any other directory keeps its name for provenance
+    const prefix = rel === 'notes' || rel === this.config.docsDir ? '' : rel
     const conflicts = files.filter((file) => this.exists(join(prefix, file)))
     return {
       solution: solution.slug,
@@ -412,10 +413,17 @@ export class DocsService {
     move?: boolean
   }): Promise<{ copied: string[]; skipped: string[]; version?: string }> {
     const solution = await this.requireSolution(input.solutionId)
-    const rel = input.path ?? this.config.docsDir
+    const rel = input.path ?? 'notes'
     const source = join(this.solutionDir(solution), rel)
+    if (input.move && this.isSharedLink(source)) {
+      // walkFiles would follow the link and `move` would delete the shared
+      // originals — refuse instead of destroying the single copy
+      throw new Error(
+        `refusing to move "${rel}" out of "${solution.slug}": it is the link to the shared docs directory`,
+      )
+    }
     const files = this.walkFiles(source)
-    const prefix = rel === this.config.docsDir ? '' : rel
+    const prefix = rel === 'notes' || rel === this.config.docsDir ? '' : rel
     const copied: string[] = []
     const skipped: string[] = []
     for (const file of files) {
@@ -443,6 +451,15 @@ export class DocsService {
     return { copied, skipped, ...(version ? { version } : {}) }
   }
 
+  /**
+   * True when the directory a migration would read is actually the LINK to the
+   * shared docs. Reading is harmless, but `move` must never be allowed to
+   * delete shared documents through it.
+   */
+  private isSharedLink(dir: string): boolean {
+    return this.readlinkSafe(dir) !== null
+  }
+
   /** Remove empty subdirectories under `dir`, keeping `dir` itself. */
   private pruneEmpty(dir: string): void {
     if (!existsSync(dir)) return
@@ -458,6 +475,49 @@ export class DocsService {
 
   private solutionDir(solution: Pick<Solution, 'slug'>): string {
     return resolve(this.config.projectRoot, this.config.solutionsDir, solution.slug)
+  }
+
+  /**
+   * Unify one solution's documents with the shared layout: if `docs/` is still
+   * a real directory inside the worktree (the pre-partition layout), copy its
+   * files into the shared docs directory, replace it with the link, and report
+   * what changed. Idempotent — an already-linked worktree is a no-op.
+   */
+  async unifySolutionDocs(solutionId: string): Promise<{
+    solution: string
+    copied: string[]
+    skipped: string[]
+    linked: boolean
+    version?: string
+  }> {
+    const solution = await this.requireSolution(solutionId)
+    const worktree = this.solutionDir(solution)
+    const target = join(worktree, this.config.docLinkPath)
+    const existing = this.lstatOrNull(target)
+    const wasRealDir = existing !== null && existing.isDirectory() && !existing.isSymbolicLink()
+    const copied: string[] = []
+    const skipped: string[] = []
+
+    if (wasRealDir) {
+      for (const file of this.walkFiles(target)) {
+        const from = join(target, file)
+        if (this.exists(file) && statSync(this.resolveInside(file)).size > statSync(from).size) {
+          skipped.push(file)
+          continue
+        }
+        this.write(file, readFileSync(from, 'utf8'))
+        copied.push(file)
+      }
+      rmSync(target, { recursive: true, force: true })
+    }
+    this.materialize(solution)
+    const linked = this.readlinkSafe(target) !== null
+    const version = await this.commitVersion(
+      copied.length > 0
+        ? `[dsh-lab] docs: unify ${solution.slug} (${copied.length} document(s) moved to the shared directory)`
+        : `[dsh-lab] docs: link ${solution.slug} to the shared directory`,
+    )
+    return { solution: solution.slug, copied, skipped, linked, ...(version ? { version } : {}) }
   }
 
   private async requireSolution(idOrSlug: string): Promise<Solution> {

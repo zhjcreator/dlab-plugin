@@ -52,8 +52,8 @@ afterAll(() => {
   if (labRoot) rmSync(labRoot, { recursive: true, force: true })
 })
 
-const mainLink = () => join(labRoot, 'solutions/main/local/docs')
-const forkLink = (slug: string) => join(labRoot, 'solutions', slug, 'local/docs')
+const mainLink = () => join(labRoot, 'solutions/main/docs')
+const forkLink = (slug: string) => join(labRoot, 'solutions', slug, 'docs')
 
 describe('shared documents (DESIGN §26)', () => {
   it('init seeds the layout: root docs/, generated .dlab area, index, link in main', () => {
@@ -64,21 +64,21 @@ describe('shared documents (DESIGN §26)', () => {
     expect(docs.state()).toBeTruthy()
     // main reaches it through the link
     expect(lstatSync(mainLink()).isSymbolicLink()).toBe(true)
-    expect(readlinkSync(mainLink())).toBe(join('..', '..', '..', 'docs'))
+    expect(readlinkSync(mainLink())).toBe(join('..', '..', 'docs'))
   })
 
   it('a fork carries the same link, pointing at the same single copy', async () => {
     await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-exp', name: 'Doc Exp' })
     expect(lstatSync(forkLink('doc-exp')).isSymbolicLink()).toBe(true)
-    expect(readlinkSync(forkLink('doc-exp'))).toBe(join('..', '..', '..', 'docs'))
+    expect(readlinkSync(forkLink('doc-exp'))).toBe(join('..', '..', 'docs'))
 
     // writing through the FORK link lands in the single root copy
     writeFileSync(join(forkLink('doc-exp'), 'roadmap.md'), '# roadmap v2\n')
     expect(readFileSync(join(labRoot, 'docs/roadmap.md'), 'utf8')).toBe('# roadmap v2\n')
     // ...and is visible through main's link, because it is the same file
     expect(readFileSync(join(mainLink(), 'roadmap.md'), 'utf8')).toBe('# roadmap v2\n')
-    // exactly one physical copy exists
-    expect(existsSync(join(labRoot, 'solutions/doc-exp/docs/roadmap.md'))).toBe(false)
+    // exactly one physical copy exists: the worktree path IS the link
+    expect(lstatSync(join(labRoot, 'solutions/doc-exp/docs')).isSymbolicLink()).toBe(true)
   })
 
   it('a checkpoint never commits shared docs into the solution branch', async () => {
@@ -101,8 +101,9 @@ describe('shared documents (DESIGN §26)', () => {
   })
 
   it('archive promotes local notes into the shared docs and snapshots them', async () => {
-    // a per-experiment note that must outlive the worktree
-    const localDir = join(labRoot, 'solutions/doc-exp/docs')
+    // a per-experiment note that must outlive the worktree (private notes
+    // live in notes/ — docs/ is the shared link)
+    const localDir = join(labRoot, 'solutions/doc-exp/notes')
     mkdirSync(localDir, { recursive: true })
     writeFileSync(join(localDir, 'finding.md'), 'LR=0.01 beats 0.001 by 0.3 AUC\n')
 
@@ -111,7 +112,7 @@ describe('shared documents (DESIGN §26)', () => {
     expect(existsSync(join(labRoot, 'solutions/doc-exp'))).toBe(false)
 
     // promoted copies + the recorded conclusion survive in the shared docs
-    expect(readFileSync(join(labRoot, 'docs/local/doc-exp/docs/finding.md'), 'utf8')).toContain('beats 0.001')
+    expect(readFileSync(join(labRoot, 'docs/local/doc-exp/notes/finding.md'), 'utf8')).toContain('beats 0.001')
     expect(readFileSync(join(labRoot, 'docs/local/doc-exp/conclusion.md'), 'utf8')).toContain('seed 1024')
     const snapshotDir = join(labRoot, 'docs/.dlab/snapshots')
     const snapshots = readdirSync(snapshotDir)
@@ -121,8 +122,8 @@ describe('shared documents (DESIGN §26)', () => {
   it('promotion can copy a chosen document to a shared path', async () => {
     await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-promote', name: 'Doc Promote' })
     // local note chosen for promotion to the shared root
-    mkdirSync(join(labRoot, 'solutions/doc-promote/docs'), { recursive: true })
-    writeFileSync(join(labRoot, 'solutions/doc-promote/docs/lessons.md'), 'shared lesson\n')
+    mkdirSync(join(labRoot, 'solutions/doc-promote/notes'), { recursive: true })
+    writeFileSync(join(labRoot, 'solutions/doc-promote/notes/lessons.md'), 'shared lesson\n')
     const result = await docs.promoteSolution({ solutionId: 'doc-promote', promote: ['lessons.md'] })
     expect(result.sharedWrites).toContain('lessons.md')
     expect(readFileSync(join(labRoot, 'docs/lessons.md'), 'utf8')).toBe('shared lesson\n')
@@ -159,9 +160,9 @@ describe('shared documents (DESIGN §26)', () => {
 
   it('migrates in-solution documents into the shared docs (plan → apply)', async () => {
     await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-migrate', name: 'Doc Migrate' })
-    const localDocs = join(labRoot, 'solutions/doc-migrate/docs')
-    mkdirSync(localDocs, { recursive: true })
-    writeFileSync(join(localDocs, 'legacy-report.md'), '# legacy report\n')
+    const localNotes = join(labRoot, 'solutions/doc-migrate/notes')
+    mkdirSync(localNotes, { recursive: true })
+    writeFileSync(join(localNotes, 'legacy-report.md'), '# legacy report\n')
 
     // the plan changes nothing
     const plan = await docs.planMigration({ solutionId: 'doc-migrate' })
@@ -174,11 +175,51 @@ describe('shared documents (DESIGN §26)', () => {
     expect(applied.version).toBeTruthy()
     // it landed at the shared ROOT (not docs/docs/) and is versioned
     expect(readFileSync(join(labRoot, 'docs/legacy-report.md'), 'utf8')).toContain('legacy report')
-    expect(existsSync(join(localDocs, 'legacy-report.md'))).toBe(false)
+    expect(existsSync(join(localNotes, 'legacy-report.md'))).toBe(false)
 
     // a second migration has nothing left to do
     const second = await docs.planMigration({ solutionId: 'doc-migrate' })
     expect(second.files).toEqual([])
+  })
+
+  it('unifySolutionDocs turns an in-solution docs directory into the link', async () => {
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-unify', name: 'Doc Unify' })
+    const worktreeDocs = join(labRoot, 'solutions/doc-unify/docs')
+    // simulate the pre-partition layout: a REAL directory of documents
+    rmSync(worktreeDocs, { recursive: true, force: true })
+    mkdirSync(worktreeDocs, { recursive: true })
+    writeFileSync(join(worktreeDocs, 'charter.md'), '# charter from the solution\n')
+
+    const result = await docs.unifySolutionDocs('doc-unify')
+    expect(result.linked).toBe(true)
+    expect(result.copied).toContain('charter.md')
+    // the document moved to the single shared copy and the path still reads
+    expect(readFileSync(join(labRoot, 'docs/charter.md'), 'utf8')).toContain('charter from the solution')
+    expect(lstatSync(worktreeDocs).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(worktreeDocs, 'charter.md'), 'utf8')).toContain('charter from the solution')
+
+    // idempotent: a second unify is a no-op
+    const again = await docs.unifySolutionDocs('doc-unify')
+    expect(again.copied).toEqual([])
+
+    // and the shared documents cannot be deleted through the link, even when
+    // a caller explicitly asks for path=docs with move
+    await expect(
+      docs.applyMigration({ solutionId: 'doc-unify', path: 'docs', move: true }),
+    ).rejects.toThrow(/refusing to move "docs"/)
+    expect(existsSync(join(labRoot, 'docs/charter.md'))).toBe(true)
+  })
+
+  it('a relative link inside a shared document resolves from any worktree', async () => {
+    // the real projects' docs reference each other as [x](sibling.md); those
+    // must keep working when read through a solution's docs/ link
+    writeFileSync(join(labRoot, 'docs/index.md'), '[charter](charter.md)\n')
+    writeFileSync(join(labRoot, 'docs/charter.md'), '# charter\n')
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-links', name: 'Doc Links' })
+    const fromWorktree = readFileSync(join(labRoot, 'solutions/doc-links/docs/index.md'), 'utf8')
+    expect(fromWorktree).toContain('(charter.md)')
+    // the sibling is readable next to it, so the relative link resolves
+    expect(readFileSync(join(labRoot, 'solutions/doc-links/docs/charter.md'), 'utf8')).toContain('# charter')
   })
 
   it('repairLinks re-materializes a link that was replaced by a real directory', async () => {

@@ -62,7 +62,7 @@ export class LabCore {
       mainBranch: 'main',
       docsDir: 'docs',
       trackDir: '.dlab',
-      docLinkPath: 'local/docs',
+      docLinkPath: 'docs',
       docsVersionRef: 'refs/dsh/docs',
     }
     mkdirSync(resolve(projectRoot, this.config.labStateDir), { recursive: true })
