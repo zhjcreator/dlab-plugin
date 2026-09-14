@@ -1,23 +1,25 @@
 /**
- * Run → DSH background-job bridge tests: registerRunJob against a fake job
- * registry and a fake lab surface. Covers the ownership contract the
- * deployment relies on —
- *   - the job is registered with kind `lab-run` and the calling agent as
- *     owner, labeled with the run id/title/command;
- *   - `done` settles only after the exit event fires and the finalized run
- *     record is read (completed / killed / failed mapping);
- *   - `cancel` synchronously initiates the SIGTERM (killProcess) and the
- *     outcome reports `killed`;
+ * Run → DSH background-job bridge tests: RunJobCoordinator against a fake
+ * job registry and a fake lab surface. Covers the v0.1.9 batched ownership
+ * contract (DESIGN §18.1) —
+ *   - the per-run job (kind `lab-run`) is UNOWNED: a streaming/stopping
+ *     handle whose settlement delivers no notice and no wake;
+ *   - the session's umbrella (kind `lab-batch`) is the ONLY owned job: it
+ *     settles — the single wake — after EVERY tracked run settled, with a
+ *     summary of the batch;
+ *   - per-run `done` settles from the finalized record, not the raw exit
+ *     code (completed / killed / failed mapping);
+ *   - per-run `cancel` synchronously initiates the SIGTERM (killProcess);
  *   - `readOutput` streams the run's stdout.log with a byte cursor;
- *   - degraded environments (no agent, no jobs service, refusing registry)
- *     return undefined and never break the run start.
+ *   - degraded environments (no agent, no jobs service, refusal) never
+ *     break the run start.
  */
 
 import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { registerRunJob } from '../../packages/lab-host/lib/run-jobs.js'
+import { RunJobCoordinator } from '../../packages/lab-host/lib/run-jobs.js'
 import type { RunView } from '../../packages/shared/lib/types.js'
 
 /** Fake of the jobs-local registry: start() runs the producer synchronously. */
@@ -25,12 +27,17 @@ class FakeJobs {
   started: Array<Record<string, unknown>> = []
   hooks: Array<{ cancel: (r?: string) => void; done: Promise<unknown>; readOutput?: () => string }> = []
   refuse = false
+  /** Simulates "no job controller serves any agent": owned starts refuse. */
+  refuseOwned = false
 
   start(spec: Record<string, unknown>): string {
-    if (this.refuse) throw new Error('background jobs unavailable: no job controller serves this agent')
+    if (this.refuse) throw new Error('background jobs unavailable')
+    if (this.refuseOwned && spec.owner !== undefined) {
+      throw new Error('no job controller serves this agent')
+    }
     this.started.push(spec)
     this.hooks.push(spec.run() as { cancel: (r?: string) => void; done: Promise<unknown>; readOutput?: () => string })
-    return `lab-run-${this.started.length}`
+    return `${String(spec.kind)}-${this.started.length}`
   }
 }
 
@@ -97,9 +104,6 @@ function makeExec(agent: unknown = { session: { header: { cwd: '/x' } } }) {
   return { agent, signal: new AbortController().signal }
 }
 
-/** An agent-shaped value carrying the cwd the bridge never needs but tools read. */
-const AGENT = { session: { header: { cwd: '/x' } } }
-
 let dir: string
 
 beforeAll(() => {
@@ -114,25 +118,70 @@ function ctxWithJobs(jobs: FakeJobs | undefined) {
   return { get: (name: string) => (name === 'jobs' ? jobs : undefined) }
 }
 
+const coordinator = (jobs: FakeJobs | undefined) => new RunJobCoordinator(ctxWithJobs(jobs) as never)
+
+/** 'pending' when the promise has not settled within `ms`. */
+async function pending(p: Promise<unknown>, ms: number): Promise<'pending' | 'done'> {
+  return Promise.race([p.then(() => 'done' as const), new Promise<'pending'>((r) => setTimeout(() => r('pending'), ms))])
+}
+
 describe('run → background job bridge', () => {
-  it('registers a lab-run job owned by the calling agent, with a descriptive label', () => {
+  it('registers an UNOWNED per-run job plus ONE owned umbrella for the session', () => {
     const jobs = new FakeJobs()
     const { surface } = makeSurface(new Map([['run-000042', makeRun()]]))
-    const jobId = registerRunJob(ctxWithJobs(jobs) as never, surface as never, makeExec(), makeRun())
+    const exec = makeExec()
+    const ids = coordinator(jobs).register(surface as never, exec, makeRun())
 
-    expect(jobId).toBe('lab-run-1')
-    const spec = jobs.started[0]!
-    expect(spec.kind).toBe('lab-run')
-    expect(spec.label).toContain('run-000042')
-    expect(spec.label).toContain('baseline')
-    expect(spec.label).toContain('python train.py --lr 0.01')
-    expect(spec.outputLimitBytes).toBeGreaterThan(0)
-    expect(spec.owner).toBeTruthy() // the calling agent
-    // hooks registered synchronously by start()
-    expect(jobs.hooks).toHaveLength(1)
+    expect(ids.dshJobId).toBe('lab-run-1')
+    expect(ids.batchJobId).toBe('lab-batch-2')
+    const [runSpec, batchSpec] = jobs.started
+    // the per-run job: streaming/stopping handle, NO owner — its settlement
+    // delivers nothing (dsh-tool-jobs routes notices by owner)
+    expect(runSpec!.kind).toBe('lab-run')
+    expect(runSpec!.label).toContain('run-000042')
+    expect(runSpec!.label).toContain('baseline')
+    expect(runSpec!.label).toContain('python train.py --lr 0.01')
+    expect(runSpec!.outputLimitBytes).toBeGreaterThan(0)
+    expect(runSpec!.owner).toBeUndefined()
+    // the umbrella: the ONLY owned job — the single wake for the batch
+    expect(batchSpec!.kind).toBe('lab-batch')
+    expect(batchSpec!.owner).toBe(exec.agent)
+    expect(batchSpec!.label).toContain('baseline') // `lab batch · <title ?? id>`
+    // hooks registered synchronously by start(): run job first, then the umbrella
+    expect(jobs.hooks).toHaveLength(2)
     expect(typeof jobs.hooks[0]!.cancel).toBe('function')
     expect(jobs.hooks[0]!.done).toBeInstanceOf(Promise)
     expect(typeof jobs.hooks[0]!.readOutput).toBe('function')
+  })
+
+  it('the umbrella settles once, after the LAST tracked run settles', async () => {
+    const jobs = new FakeJobs()
+    const a = makeRun({ id: 'run-000050' })
+    const b = makeRun({ id: 'run-000051' })
+    const map = new Map([
+      [a.id, a],
+      [b.id, b],
+    ])
+    const { surface, fireExit } = makeSurface(map)
+    const exec = makeExec()
+    const coord = coordinator(jobs)
+    coord.register(surface as never, exec, a)
+    coord.register(surface as never, exec, b)
+    // registration order: run-a, umbrella, run-b
+    const umbrella = jobs.hooks[1]!
+
+    map.set(a.id, { ...a, status: 'succeeded' })
+    fireExit(a.id, 0)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await pending(umbrella.done, 50)).toBe('pending') // b still live: NO wake
+
+    map.set(b.id, { ...b, status: 'failed', exitCode: 2 })
+    fireExit(b.id, 2)
+    const outcome = (await umbrella.done) as { status: string; detail?: string }
+    expect(outcome.status).toBe('completed')
+    expect(outcome.detail).toContain('2 lab run(s) settled')
+    expect(outcome.detail).toContain('1 succeeded')
+    expect(outcome.detail).toContain('1 failed')
   })
 
   it('settles done from the finalized record, not the raw exit code', async () => {
@@ -140,7 +189,7 @@ describe('run → background job bridge', () => {
     const run = makeRun()
     const map = new Map([[run.id, run]])
     const { surface, fireExit } = makeSurface(map)
-    registerRunJob(ctxWithJobs(jobs) as never, surface as never, makeExec(), run)
+    coordinator(jobs).register(surface as never, makeExec(), run)
 
     // the exit callback fires with 0, but the persisted record says failed —
     // the outcome must reflect the authoritative record
@@ -156,7 +205,7 @@ describe('run → background job bridge', () => {
     const run = makeRun({ id: 'run-000043' })
     const map = new Map([[run.id, run]])
     const { surface, fireExit } = makeSurface(map)
-    registerRunJob(ctxWithJobs(jobs) as never, surface as never, makeExec(), run)
+    coordinator(jobs).register(surface as never, makeExec(), run)
 
     map.set(run.id, { ...run, status: 'canceled' })
     fireExit(run.id, 143)
@@ -175,7 +224,7 @@ describe('run → background job bridge', () => {
     const run = makeRun({ id: 'run-000044' })
     const map = new Map([[run.id, run]])
     const { surface, killed, fireExit } = makeSurface(map)
-    registerRunJob(ctxWithJobs(jobs) as never, surface as never, makeExec(), run)
+    coordinator(jobs).register(surface as never, makeExec(), run)
 
     jobs.hooks[0]!.cancel('user requested')
     // the SIGTERM initiation must happen synchronously inside cancel()
@@ -197,7 +246,7 @@ describe('run → background job bridge', () => {
     const run = makeRun({ id: 'run-000045', title: undefined, runDir: 'experiments/run-000045' })
     const map = new Map([[run.id, run]])
     const { surface } = makeSurface(map, dir)
-    registerRunJob(ctxWithJobs(jobs) as never, surface as never, makeExec(), run)
+    coordinator(jobs).register(surface as never, makeExec(), run)
 
     const read = jobs.hooks[0]!.readOutput!
     expect(read()).toBe('epoch 1\n')
@@ -208,8 +257,7 @@ describe('run → background job bridge', () => {
 
     // a job for a run whose directory is unknown reads empty, never throws
     const noDir = new FakeJobs()
-    registerRunJob(
-      ctxWithJobs(noDir) as never,
+    coordinator(noDir).register(
       surface as never,
       makeExec(),
       makeRun({ id: 'run-000046', runDir: undefined }),
@@ -220,19 +268,33 @@ describe('run → background job bridge', () => {
     expect(jobs.started[0]!.label).toBe('run-000045 · python train.py --lr 0.01')
   })
 
-  it('degrades to undefined without an agent, without a jobs service, or on refusal', () => {
+  it('degrades gracefully without an agent, a jobs service, or under refusal', () => {
     const { surface } = makeSurface(new Map())
     const run = makeRun()
 
-    // no owning agent (RPC/CLI caller): nothing to wake
-    expect(registerRunJob(ctxWithJobs(new FakeJobs()) as never, surface as never, makeExec(null), run)).toBeUndefined()
-    // no jobs service mounted
-    expect(registerRunJob(ctxWithJobs(undefined) as never, surface as never, makeExec(), run)).toBeUndefined()
-    // registry refuses (no controller serves the owner): the run still starts
+    // no owning agent (RPC/CLI caller): the unowned streaming job still
+    // registers — only the wake (the umbrella) is agent-bound
+    const solo = new FakeJobs()
+    const noAgent = coordinator(solo).register(surface as never, makeExec(null), run)
+    expect(noAgent.dshJobId).toBe('lab-run-1')
+    expect(noAgent.batchJobId).toBeUndefined()
+    expect(solo.started).toHaveLength(1)
+
+    // no jobs service mounted: nothing at all
+    expect(coordinator(undefined).register(surface as never, makeExec(), run)).toEqual({})
+
+    // registry refuses everything: the run still starts, nothing registered
     const refusing = new FakeJobs()
     refusing.refuse = true
-    expect(registerRunJob(ctxWithJobs(refusing) as never, surface as never, makeExec(), run)).toBeUndefined()
-    // and a refusal leaves no hooks behind
+    expect(coordinator(refusing).register(surface as never, makeExec(), run)).toEqual({})
     expect(refusing.hooks).toHaveLength(0)
+
+    // owned starts refused (no controller serves the owner) but unowned
+    // allowed: streaming survives, only the wake is lost
+    const noController = new FakeJobs()
+    noController.refuseOwned = true
+    const wakeless = coordinator(noController).register(surface as never, makeExec(), run)
+    expect(wakeless.dshJobId).toBe('lab-run-1')
+    expect(wakeless.batchJobId).toBeUndefined()
   })
 })

@@ -920,46 +920,61 @@ interface ProcessInfo {
 
 Plugin 重启后 reconcile：检查 PID 是否存活，更新 Run 状态（alive / lost）。
 
-### 18.1 Run 即 DSH 后台任务（v0.1.4 起）
+### 18.1 Run 即 DSH 后台任务（v0.1.4 起；v0.1.9 起批式唤醒）
 
-Run 完成必须能**唤醒 agent**，而不是让 agent 轮询 `lab_list_runs`。做法是把每次
-`lab_start_run` 注册进 DSH 通用任务注册表 `ctx.jobs`（与 `bash run_in_background`
-同一个）：
+Run 完成必须能**唤醒 agent**，而不是让 agent 轮询 `lab_list_runs`；且一个会话的一批
+run 只唤醒**一次**（v0.1.9 起）——每个 run 各唤醒一次会重复消耗 wake 预算、打断进行中的
+工作。做法是每会话两个 job 形态：
+
+* **每个 run 一个无 owner 的 job**（kind `lab-run`，id 形如 `lab-run-3`）：
+  `job_output` 流式读该 run 的 stdout，`job_kill` 停它。settle 不投递任何通知 ——
+  `dsh-tool-jobs` 的完成监听器按 owner 投递（`owner === undefined` 直接返回）。
+* **每会话一个有 owner 的伞 job**（kind `lab-batch`，由首个 run 创建，后续 run 加入；
+  drain 后由下一个 run 重建）：只要该 agent 还有活跃 lab run 就保持 live，最后一个
+  run settle 时才 settle —— idle 属主被 `followup` 唤醒**一次**（消耗一次 wake 预算），
+  否则 `inject` 一条 notice；notice 的 detail 汇总全部 run（
+  `all N lab run(s) settled: x succeeded, y failed (run-…, run-…)`）。
+  伞的 `readOutput` 是全部活跃 run 的交错日志流（每行带 run id 前缀）；
+  伞的 `cancel` 同步停掉全部 tracked run（属主销毁 → 停掉该会话全部训练，与后台 bash
+  语义一致）。
 
 ```ts
+// 每个 run：无 owner，只做流式/停止的句柄
 jobs.start({
-  kind: 'lab-run',                 // id 形如 lab-run-3
+  kind: 'lab-run',
   label: `${run.id} · ${title} · ${command}`,
-  owner: exec.agent,               // 由调用 agent 拥有 —— 唤醒的关键
-  outputLimitBytes: 12 * 1024,
-  run: () => ({
-    cancel: () => { killProcess(); stop(); },   // 必须同步发起 SIGTERM
-    done,                                        // run 进程退出并 finalize 后 settle
-    readOutput: () => stdoutDelta(),             // 流式 stdout 游标
-  }),
+  // 无 owner —— settle 不唤醒任何人
+  run: () => ({ cancel, done, readOutput }),   // 与旧形状相同
+})
+// 每会话一把伞：唯一拥有 owner 的 job —— 唯一的唤醒点
+jobs.start({
+  kind: 'lab-batch',
+  label: `lab batch · ${首run.title ?? id}`,
+  owner: exec.agent,
+  run: () => ({ cancel: 停全部, done: 直到活跃集合清空, readOutput: 交错流 }),
 })
 ```
 
 契约要点：
 
-* **owner 决定投递**：`dsh-tool-jobs` 注册的完成监听器按 owner 投递通知 —— idle 的
-  属主会话被 `followup` 唤醒（消耗一次 wake 预算），否则 `inject` 一条 notice。
-  没有 owner（RPC/CLI 调用）则不注册，行为与今天一致。
-* **`jobs.start` 前置检查 controller**：若挂载的 preset 没有 `tool-jobs`，注册会抛
-  "no job controller serves this agent"；桥接层吞掉异常并返回 undefined，run 照常执行，
-  只丢失唤醒能力。
+* **owner 决定投递，伞是唯一 owner**：无 owner 的 per-run job 永不投递；伞 settle 一次
+  = 唤醒一次。若伞注册被拒（挂载的 preset 没有 `tool-jobs` controller 等），run 照常执行、
+  无 owner 的流式 job 照常可读，只是丢失唤醒能力（桥接层吞掉异常）。
 * **`done` 必须是最终状态**：`RunService.onRunExit` 在 `finalize()` **之后**触发，桥接
-  再去读 run 记录，因此 completed/killed/failed 与面板一致。
+  再去读 run 记录，因此 completed/killed/failed 与面板一致；伞的汇总同样基于 finalize
+  后的记录。
 * **`cancel` 必须同步**：jobs 契约要求 `cancel()` 同步发出终止；`LocalRunner.stop()`
   在首个 await 之前就对进程组发 SIGTERM，随后 `stop()` 做状态/GPU/worktree 收尾。
-* **属主销毁即取消**：agent 被 dispose 时注册表会 cancel 其 owned job —— 会话销毁会停掉
-  它启动的训练，与后台 bash 语义一致。
+  伞的 cancel 对每个 tracked run 同样先同步 SIGTERM。
+* **属主销毁即取消**：agent 被 dispose 时注册表 cancel 其 owned job —— 即伞 —— 伞的
+  cancel 停掉该会话全部 run（无 owner 的 per-run job 不随属主销毁，但 run 已被伞停掉）。
 * **进程内生命周期**：注册表记录与 runner 的 live map 一样是进程内的；宿主重启后 adopt
   的 run 不被观察，仍由 `.exit_code` 驱动的跨进程 finalize 收尾。
 
-被唤醒之外的读取路径同样复用通用工具：`job_output <lab-run-N>` 流式读 run 的
-`stdout.log`，`job_kill` 与 `lab_stop_run` 等价。实现见
-`packages/lab-host/src/run-jobs.ts`，另有 `runs.log` RPC 端点供面板读尾部日志。
+被唤醒之外的读取路径同样复用通用工具：`job_output <lab-run-N>` 流式读单个 run 的
+`stdout.log`，`job_output <lab-batch-N>` 读全部活跃 run 的交错流，`job_kill` 与
+`lab_stop_run` 等价。实现见 `packages/lab-host/src/run-jobs.ts`，另有 `runs.log` RPC
+端点供面板读尾部日志。
 
 ---
 

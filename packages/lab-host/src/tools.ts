@@ -21,7 +21,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { agentSessionCwd, type LabSurface, type LabService } from './index.js'
-import { registerRunJob } from './run-jobs.js'
+import { RunJobCoordinator } from './run-jobs.js'
 
 export const name = 'dsh-lab-tools'
 export const inject = ['lab', 'tools']
@@ -84,6 +84,7 @@ function surfaceFor(lab: LabService, exec: { agent?: unknown }): LabSurface {
 
 export function apply(ctx: Context): void {
   const lab = ctx.lab
+  const runJobs = new RunJobCoordinator(ctx)
 
   ctx.tools.register(
     defineTool({
@@ -477,7 +478,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_start_run',
       description:
-        'Start an experiment run on a solution. Snapshots the current working tree immutably (uncommitted changes included, branch untouched), materializes a detached run worktree, and launches the command there with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits to the solution never affect the run. GPU allocation is exclusive per card and reservation-backed: concurrent submissions spread across free cards, and each run holds its cards from submission until it finishes — submit several tasks at once and they will NOT pile onto one card. A run without GPU parameters takes one free card when available and otherwise proceeds on CPU (no CUDA_VISIBLE_DEVICES); an explicit gpuCount/minFreeVramMB request fails loudly when no card satisfies it. The run is registered as a DSH background job (kind lab-run, e.g. job id lab-run-3) owned by this session: you are notified in-session when the run settles — do not busy-poll lab_list_runs; track the run live with job_output (streams the run stdout) and stop it with job_kill or lab_stop_run. Disposing the owning session cancels its runs.',
+        'Start an experiment run on a solution. Snapshots the current working tree immutably (uncommitted changes included, branch untouched), materializes a detached run worktree, and launches the command there with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits to the solution never affect the run. GPU allocation is exclusive per card and reservation-backed: concurrent submissions spread across free cards, and each run holds its cards from submission until it finishes — submit several tasks at once and they will NOT pile onto one card. A run without GPU parameters takes one free card when available and otherwise proceeds on CPU (no CUDA_VISIBLE_DEVICES); an explicit gpuCount/minFreeVramMB request fails loudly when no card satisfies it. Each run registers a streamable background job (kind lab-run; the result carries dshJobId): job_output streams its stdout, job_kill or lab_stop_run stops it. Your session is woken exactly ONCE per batch — after ALL its lab runs have settled — through an umbrella job (kind lab-batch; the result carries batchJobId) whose notice summarizes every run: do not busy-poll lab_list_runs, and job_output on the batchJobId streams all live runs interleaved (each line prefixed with its run id). Disposing the owning session stops its runs.',
       parameters: {
         solution: { type: 'string', required: true, description: 'Solution id or slug' },
         command: {
@@ -521,8 +522,8 @@ export function apply(ctx: Context): void {
                 }
               : undefined,
         })
-        const jobId = registerRunJob(ctx, surface, exec, view)
-        return json(jobId ? { ...view, dshJobId: jobId } : view)
+        const jobIds = runJobs.register(surface, exec, view)
+        return json({ ...view, ...jobIds })
       },
     }),
   )
@@ -531,7 +532,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_stop_run',
       description:
-        'Stop a running or queued experiment run (SIGTERM to its process group). A run started via lab_start_run also has a DSH background job (lab-run-N); stopping it through either path settles the job and notifies the owning session.',
+        'Stop a running or queued experiment run (SIGTERM to its process group). A run started via lab_start_run also has a streamable background job (lab-run-N); stopping it through either path is equivalent. Stopping the LAST live run of the session settles the batch umbrella job, waking the session once with the batch summary.',
       parameters: {
         runId: { type: 'string', required: true, description: 'Run id, e.g. run-000001' },
       },
