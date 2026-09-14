@@ -26,9 +26,105 @@ See `docs/DESIGN.md` for the full design specification.
 | `packages/scheduler` | GPU discovery + reservation | no |
 | `packages/lab-host` | DSH host bundle (`ctx.lab`, RPC, tools, shellEnv, prompt) | yes |
 | `packages/lab-client` | DSH browser bundle (ClientLabModel + slot UI) | yes |
-| `packages/preset-lab` | agent preset granting lab_* tools per session | yes (agent plane) |
+| `packages/preset-lab` | 深度学习实验 agent preset — the deployable preset directory (`standard` + DL protocol + `lab_*` tool row + bundled `dlab` skill) | yes (agent plane) |
 | `packages/cli` | `dsh-lab` CLI (no DSH runtime needed) | no |
 | `tests/` | unit / integration / e2e / concurrency suites | mixed |
+
+## Initialization
+
+End-to-end setup from a clean checkout: build the plugin, install it into a dsh
+profile, install the agent preset, restart the Host, and select the preset.
+
+### 1. Build and pack the runtime packages
+
+```bash
+pnpm install
+pnpm build
+for p in shared core git store runner scheduler lab-host lab-client cli; do
+  (cd "packages/$p" && pnpm pack --pack-destination "$PWD/../../dist-tb")
+done
+```
+
+`dist-tb/` ends up holding one `@dsh-lab/*.tgz` per runtime package.
+
+### 2. Install the plugin into a dsh profile
+
+Point the profile's dependencies at those tarballs, pin the same versions under
+`overrides:` in its `pnpm-workspace.yaml` (they fix the `@dsh-lab` family for
+nested deps), and name the two bundles that must be composed:
+
+```jsonc
+// ~/.dsh/profiles/<name>/package.json
+{
+  "dependencies": {
+    "@dsh-lab/core": "file:/…/dlab-plugin/dist-tb/dsh-lab-core-0.2.2.tgz"
+    // … git, store, runner, scheduler, shared, host, client, cli
+  },
+  "dsh": { "profile": { "bundles": [ "…", "@dsh-lab/host", "@dsh-lab/client" ] } }
+}
+```
+
+```bash
+cd ~/.dsh/profiles/<name> && pnpm install
+```
+
+`@dsh-lab/host` supplies `ctx.lab`, the `lab_*` tools, the `/dlab` RPC channel,
+the `DSH_LAB_*` shell variables and the `lab:context` prompt section — all
+**host-plane**, shared by every session. `@dsh-lab/client` serves the browser
+panel. Host rows load once at process start, so **restart `dsh web`** after
+changing them.
+
+### 3. Install the agent preset (深度学习实验, id `dlab`)
+
+DSH discovers presets as directories under the harness home; the directory name
+is the preset id. The preset is **not** installed as a profile bundle:
+
+```bash
+./scripts/install-preset.sh            # → $DSH_HOME/.agent-presets/dlab
+```
+
+or by hand:
+
+```bash
+DEST="${DSH_HOME:-$HOME/.dsh}/.agent-presets/dlab"
+rm -rf "$DEST" && mkdir -p "$DEST"
+cp packages/preset-lab/agent.cordis.yml packages/preset-lab/preset.yml "$DEST/"
+cp -r packages/preset-lab/skills "$DEST/skills"
+```
+
+Copy, do not symlink: discovery only accepts real directories, and the bundled
+`skills/` root is resolved relative to the copy. The composition is `standard`
+plus the DL operating protocol (directional calls go to the `subagent_sol`
+advisor, a new direction and any merge back to `main` need human confirmation,
+a submitted run ends the turn) plus the `lab_*` tool row and the `dlab` skill.
+Pass an id (`./scripts/install-preset.sh my-dlab`) to keep it side by side with
+another preset.
+
+### 4. Select it and restart
+
+```bash
+dsh web
+```
+
+Pick **深度学习实验** in the preset picker, or make it the session default:
+
+```yaml
+# ~/.dsh/settings.yaml
+agent-presets:
+  default: dlab
+```
+
+Editing a preset file does **not** hot-reload into a running Host — a mounted
+preset keeps the composition it was mounted with. Re-run step 3 and restart.
+
+### 5. Optional: the `dlab` skill user-globally
+
+The preset already carries the skill. To let sessions on *other* presets see it
+too, install it in the harness skill root:
+
+```bash
+mkdir -p ~/.dsh/skills/dlab && cp packages/preset-lab/skills/dlab/SKILL.md ~/.dsh/skills/dlab/
+```
 
 ## Deployment (per-profile tarball installs)
 
@@ -45,14 +141,9 @@ To expose the `dsh-lab` CLI on PATH in such a deployment, also depend on
 ln -sf ~/.dsh/profiles/<name>/node_modules/.bin/dsh-lab ~/.local/bin/dsh-lab
 ```
 
-The `dlab` usage skill (source: `packages/preset-lab/skills/dlab/`) teaches
-agents the experiment workflow — launching runs, card selection, queue and
-wake semantics, sweeps, merge gates. Install it user-globally so every
-session (any lab project) sees it in its skill catalog:
-
-```bash
-mkdir -p ~/.dsh/skills/dlab && cp packages/preset-lab/skills/dlab/SKILL.md ~/.dsh/skills/dlab/
-```
+The `dlab` usage skill travels with the agent preset (see
+[Initialization](#initialization)); step 5 there installs it user-globally so
+every session, in any lab project, sees it in its skill catalog.
 
 ## Development
 

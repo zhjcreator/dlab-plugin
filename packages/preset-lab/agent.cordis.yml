@@ -1,19 +1,466 @@
-# dlab-lab agent preset.
+# The `dlab` agent preset — 深度学习实验: the `standard` coding agent, tuned for
+# deep-learning experiments on a Deep Learning Lab project.
 #
-# Rows here are agent-plane: they register into THIS preset's layer of the
-# host `tools` registry and the host `systemPrompt` service. They publish no
-# services, so no isolate realm is needed — a preset must only wrap a row in a
-# realm when the row itself publishes a service.
+# Two things differ from `standard`, and nothing else:
 #
-# lab tools resolve the HOST-provided `lab` service via ctx.get (they never
-# publish a service themselves). The host rows that provide lab / git / store
-# / runner / scheduler live in the host composition (@dsh-lab/host), because
-# they are shared across every session.
+#   1. The DL OPERATING PROTOCOL in `persona` — which directional questions
+#      MUST go to `subagent_sol`, that BOTH a new direction and any merge back
+#      to main are confirmed by a human before they happen, that a submitted
+#      training run ENDS the turn (the completion notice wakes the agent;
+#      polling is forbidden), how a validated line is merged / archived /
+#      iterated, and where lab documents and run artifacts live. The suffix
+#      covers the top-level agent AND every child.
+#   2. The Deep Learning Lab TOOLSET — the `lab_*` tool row plus the `dlab`
+#      usage skill, which travels inside this preset directory.
+#
+# The advisor row, `tool-subagent-sol`, pins its children to
+# `openai-codex/gpt-5.6-sol` at reasoning effort `max`, keeps them as DURABLE
+# advisors (`continuable`: the child survives its run and keeps its own context
+# for follow-up `send_message` turns), caps them at depth 1, and gives them an
+# advisor persona that answers at DIRECTION level only — whether the current
+# line is worth continuing, whether the structure needs to change and which
+# way, which class of parameters to move next — never a concrete experiment
+# plan, values, sweep config, or code. The plain `subagent` row drops model
+# selection, so every ordinary child stays on the parent's own route.
+#
+# The lab SERVICE (ctx.lab), the panel RPC, DSH_LAB_* shell env and the
+# lab:context prompt section live in the HOST composition (@dsh-lab/host in the
+# profile) — registries and anything shared across sessions are host-plane. The
+# lab_* TOOL row below registers into this preset's layer of the host tools
+# registry and publishes nothing (it resolves `lab` via ctx.get), so it needs no
+# isolate realm.
+#
+# This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
+# standing scope; every session naming it joins by scope parentage, so the
+# tools and prompt sections registered here cover each joined agent while a
+# session's own state stays keyed per Session/Agent inside the plugins. The
+# host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
+# preset must not own: the registries themselves, the sandbox and approval
+# stack, persistence, and the model route.
+#
+# A service row here MUST sit inside a group carrying an `isolate` realm.
+# Without one it publishes into the root realm, where it is process-global —
+# another preset publishing the same name collides, and a host reader would
+# resolve one preset's instance for every session; `dsh-agent-presets` rejects
+# that at mount. `true` means an entry-local realm: this standing mount's own
+# private instance, apart from every other preset's. (A shared label does NOT
+# pool instances — `provide()` throws on the second registration under the
+# same realm symbol; labels join REALMS, and are not what this file needs.)
 
-# The lab_* tools (registered into this preset's tools layer). The tool plugin
-# itself publishes nothing; it consumes the host 'lab' service.
+# ── identity ────────────────────────────────────────────────────────────────
+
+# The preset's own persona, shadowing the deployment default for this agent.
+# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+#
+# The suffix is this preset's OPERATING PROTOCOL. Every agent on this composition
+# reads it — the top-level agent AND every delegated child, including a
+# `subagent_sol` child, which is how the delegation policy and the document map
+# reach the advisor without the parent restating them. Individual `{{…}}` groups
+# interpolate strictly against registered prompt variables, so no other braces
+# may appear here.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: >-
+      You are a deep-learning experiment agent powered by the {{model}} model.
+    suffix: |
+      Your working directory is {{cwd}}.
+
+      ## 深度学习实验规程
+
+      你是实验的执行者：设计、实现、运行、记录、复现，并维护文档。核心方向性判断交给
+      subagent_sol（Codex gpt-5.6-sol，思考强度 max），你负责落地与验证。
+
+      ### 必须委托 subagent_sol 的方向性判断
+      它只回答"往哪走"，不回答"具体怎么跑"。以下三类必须交给它：
+      1. 模型结构是否需要调整、往哪个方向调（模块 / 损失 / 优化目标这一层的取舍）。
+      2. 拿到某一步完整实验结果后的分析：当前方向是否有意义、下一步该动哪一类参数、
+        朝哪个方向动。
+      3. 规划性任务：路线选择、方案对比、实验优先级等方向性决策。
+
+      不要向它索要执行细节：具体超参取值、sweep 配置、训练脚本、实现方案与逐行代码都由
+      你自己决定，它给出的边界就是方向。也不要把检索、跑腿、机械实现丢给它 —— 那些用
+      subagent 或 subagent_fork（模型与你相同）。不要为了"更强"而滥用 subagent_sol。
+
+      ### subagent_sol 是长期顾问：建立一次，之后复用
+      用 subagent_sol 起的子 Agent 会一直活着并保留它自己的上下文（它读过的文档、
+      看过的数据都在里面）。所以不要每次重新冷启动它：
+      - 首次委托给一份自包含简报 —— 它看不到你的对话。写清目标与背景、当前配置、完整
+        结果或结果文件路径、已试方案与失败原因、约束条件；description 用稳定标签
+        （例如「Sol 顾问：主线」），方便以后找回。
+      - 后续追问（新的实验结果、对上一结论的质疑、下一步取舍）先用 list_agents 找到同一个
+        顾问，再用 send_message 只发**增量**：新结果、新路径、你已经做了什么。
+      - 需要拿到结论才能继续时传 run_in_background: false 前台等待；让它并行分析时保持
+        默认后台，它结束时你会收到通知。
+      - 只有假设或方向整体换掉、或旧顾问的结论已被新证据推翻到无法修正时，才新开顾问。
+      - 简报里点名要它看的文件是必读项；但不要要求它通读全部文档与历史产物 —— 其余读哪些
+        由它自己判断。它给的是方向判断，具体实验设计与执行仍然由你完成。
+
+      ### 新方向：先人工确认，再 fork 验证
+      一条新方向 = 一个新假设。顺序是"确认 → fork → 验证 → 处置"，不要跳步：
+      1. 方向确定后（通常来自 subagent_sol），把结论整理成一段可审阅的话 —— 方向是什么、
+         依据、影响范围、打算怎么验证 —— 用 ask_user_question 请用户确认。
+      2. **用户确认之前，不要 fork、不要启动实验、不要改动主线代码。** 用户否决或改向时，
+         把新意见发回同一个顾问重新出方向，再确认一次。
+      3. 确认后用 lab_fork_solution 从 main（或当前主线）fork 出新 solution，把假设写进
+         hypothesis；新方向只在它自己的 worktree 里验证，不要直接改主线。
+      4. 拿到完整结果后，由 subagent_sol 给方向性判定，你负责执行结论：
+         - 有效 → lab_checkpoint_solution 提交，然后**先请人工确认，再并回 main**（见下节）；
+         - 无效 → lab_archive_solution 归档（归档会自动把结论 promote 到 docs/local/<slug>/，
+           不要让失败的线无声消失）；
+         - 还有进一步验证空间 → 留在该 solution 上继续迭代；假设变了就从它再 fork 子线。
+
+      同一条线上的参数扫描不要 fork：那是同假设的变体，用 lab_start_run 跑在同一个
+      solution 上，共享 sweep/<name> 标签加每个 run 的 <param>=<value> 标签。
+
+      ### 提交训练任务后就停：等唤醒，不要守着
+      lab_start_run 提交的 run 由运行时托管：它结束时会把通知发回本会话并唤醒你。所以：
+      1. 提交完就**结束当前回合**，只给一句提交摘要 —— run id、用的配置、产物会落在
+         DSH_LAB_RUN_DIR 的哪一层 —— 不要在原地等它跑完。
+      2. **不要轮询**：不要 sleep 加重试、不要循环 job_output / lab_get_run /
+         lab_list_runs "看进度"、也不要把长训练套进前台阻塞的等待里。轮询只会白烧上下文。
+         （只有用户主动问进度时，才看一眼 lab_get_run 或 job_output 回答。）
+      3. 被唤醒后：先用 lab_get_run 拿状态与指标，再读 DSH_LAB_RUN_DIR 下的 logs/、
+         metrics/、manifest.json、.exit_code；确认同一批（同一次 sweep 的多个 run）
+         都已结束，再把完整结果交给 subagent_sol 做方向判定，然后按
+         "有效 / 无效 / 还有进一步可能" 处置（并回 main 要先经人工确认）。
+      4. 批次里还有 run 在跑时不要下方向结论；失败或被停的 run 也要如实记进笔记与结论，
+         不要当成没发生过。
+      5. 自动唤醒本身有配额（本预设是同一条链连续 20 次）：配额用完后完成通知会积压，
+         直到你下次开口才注入。真遇上这种情况不要用轮询硬撑 —— 把当前状态与待办写清楚，
+         结束回合等人。
+
+      ### 并回 main 必须先经人工确认
+      任何写进 main 的操作 —— 新方向验证后的 lab_merge_solution、子线合并、consolidate ——
+      都要先停下来等人确认，不要因为"指标确实更好"就自己合：
+      1. 先把判定整理成待批件：这条线验证了什么；相对 main 的差异（指标 + 文件），证据是
+         哪些成功的 run 与 lab_run_diff / lab_solution_diff 结果；若合并会动到哪些共享文档
+         与主线资产。
+      2. 用 ask_user_question 给出"合并 / 先不合"的选择并等答复。
+      3. 用户确认后才执行 lab_merge_solution。被否决时不要反复追问：保留该 solution，
+         按用户给出的新方向继续（或按需归档）。
+
+      ### 文档与实验结果位置
+      - 共享文档（章程、路线图、基线引用、跨实验经验）：项目根 docs/，每个 solution 通过
+        docs 链接看到同一份；读用 lab_docs，写用 lab_write_doc。
+      - 单个实验的私有笔记：本 solution 内的 notes/。
+      - 实验产物：$DSH_LAB_RUN_DIR 下的 logs/、metrics/、artifacts/、configs/、
+        manifest.json、.exit_code。分析结果先读这里，再下结论。
+      - 结论沉淀：实验有结论后用 lab_promote_docs 提升到 docs/local/<slug>/
+        （archive 会自动 promote）。
+      - 准确路径以 lab:context 提示段（Project / Root / Shared docs）与
+        $DSH_LAB_DOCS / $DSH_LAB_DOCS_LINK / $DSH_LAB_RUN_DIR 环境变量为准，
+        不要照抄本段去猜路径。
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
+# publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
+# the criterion for host-plane ownership — injection resolves before any session
+# exists, so there is no agent to key by. Behind a preset realm those variables
+# never reached the model's shell at all. Both shell tools consume the host
+# registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
+# host-plane too.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so
+# they need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+
+# Only the model-facing controls. The task REGISTRY stays on the host plane:
+# its producers sit outside any realm this file could put it in — `tool-bash`
+# above resolves it with `ctx.get`, and an entry-local realm here is invisible
+# to every sibling row, so `run_in_background` would answer "background jobs
+# unavailable" while these controls sat in the catalog. The registry is keyed by
+# owning agent anyway, so one host instance serves every session. What a preset
+# chooses is whether its agent can collect and stop background work at all.
+# `maxConsecutiveWakes` is raised from the deployment default of 3: a lab loop is
+# exactly the self-exciting chain the bound exists for — a woken turn submits the
+# run whose completion wakes it again — and at 3 an unattended overnight campaign
+# goes quiet after the third run. 20 keeps a night's worth of runs waking while
+# staying bounded; any user message restores the budget, and a run that settles
+# while the agent is busy is injected into its next step rather than costing a turn.
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+  config:
+    maxConsecutiveWakes: 20
+
+# ── deep learning lab ───────────────────────────────────────────────────────
+#
+# The lab_* model tools, registered into THIS preset's layer of the host tools
+# registry. The row publishes nothing — it resolves the host-provided 'lab'
+# service via ctx.get (the service, panel RPC, shell env and the lab:context
+# prompt section live in @dsh-lab/host on the host plane) — so it needs no
+# realm. Sessions whose cwd belongs to no lab project still mount fine: every
+# lab_* tool resolves its lab per execution and fails soft or loud per its
+# contract.
 - id: tool-dlab-lab
-  name: '@dsh-lab/lab-tool-set'
-  inject:
-    - tools
-  config: {}
+  name: '@dsh-lab/host/tools'
+
+# ── skills ──────────────────────────────────────────────────────────────────
+
+# The skill REGISTRY lives in the host composition and is layered per scope:
+# these rows register into THIS preset's layer of it, so they need no realm.
+# `skill-filesystem` contributes local-root discovery for agents on this preset, and
+# `tool-skill` gives them the catalog and loader; the merged catalog also
+# carries whatever the deployment registered globally (repository plugins).
+# The `dlab` usage skill travels with the preset rather than living only in the
+# user's skill root: `baseUrl` is the preset's own directory, so the root
+# resolves wherever the preset is installed.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── goals ───────────────────────────────────────────────────────────────────
+
+# The goal service and session driver stay on the host plane, where the Gateway
+# can resolve them. The human command and model-facing tool register into this
+# preset's scoped layers.
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+# Plan state is per-agent by nature, so an entry-local realm is not a
+# workaround here — it is the correct lifetime.
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+              Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+              Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+              When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+
+# `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
+# share this realm rather than sit outside it.
+#
+# `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
+# plane, and the rows here resolve that one instance. It takes no configuration,
+# keys every fold by Session, and owns the context-meter projection units the
+# browser reads for every session — behind a realm those units would come and go
+# with whichever presets happen to be mounted. What a preset chooses is whether
+# its agent compacts at all, which is `compaction-basic` below.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+
+# The `subagents` registry and its spawn/fork backends live in the HOST
+# composition: the registry is a process singleton whose cross-session queries
+# the api-proxy serves to the browser, and a provider name may only be
+# registered once. This preset contributes the delegation TOOLS, which resolve
+# that host registry.
+#
+# `workflows` is different — nothing outside an agent reads it — so every row
+# that reaches it shares one entry-local realm here, and a consumer left
+# outside would resolve a host registry this preset does not populate.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    # 通用委托：子 Agent 的 provider/model 恒等于主 Agent。关掉
+    # `modelSelectionSettings` 就是这条不变式 —— 该工具不再暴露
+    # provider/model/reasoning_effort 字段，也不注册 list_subagent_models，
+    # 于是模型没有任何办法把普通子 Agent 挪到别的路由上。
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        modelSelectionSettings: false
+        backgroundMode: continuable
+
+    # Fork omits model selection so provider/model stay equal to the parent and
+    # the inherited history remains eligible for KV Cache reuse. This preset
+    # keeps fork continuable; parent and child inherit the same messaging tool,
+    # while the parent id and return guidance follow the inherited history.
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    # 方向性任务专用：模型设计 / 拿到完整实验结果后的分析与下一步 / 规划性决策。
+    # 这是本 preset 与 `standard` 唯一的能力差异：
+    #   * `agentOptions` 把子 Agent 钉在 Codex gpt-5.6-sol、思考强度 max；
+    #   * `provider: spawn` 不继承对话 —— 首次简报必须自包含（规程见 persona）；
+    #   * `backgroundMode: continuable` 让顾问是长期子 Agent：首轮之后它保留自己的会话
+    #     （读过的文档、分析过的数据都在里面），后续追问用 send_message 发增量即可，
+    #     不必每次冷启动重读上下文。代价是默认后台 —— 省略 run_in_background 就返回
+    #     childId 而不等待，需要结论才能继续时父 Agent 要显式 run_in_background: false；
+    #   * `maxDepth: 1`：Sol 子 Agent 自己的 depth 就是 1，它再往下委托会被拒，
+    #     控制成本的同时不影响主 Agent 开普通子 Agent。
+    # `persona` 只覆盖该子 Agent 的 persona-prefix（preset 的 suffix 仍然生效），
+    # 所以顾问规程只有 Sol 子 Agent 付费，主 Agent 的上下文不受影响。
+    - id: tool-subagent-sol
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent_sol
+        backgroundMode: continuable
+        maxDepth: 1
+        agentOptions:
+          provider: openai-codex
+          model: gpt-5.6-sol
+          reasoningEffort: max
+        persona: |
+          你是这次深度学习实验的方向顾问（Codex gpt-5.6-sol，思考强度 max），
+          委托方是负责执行的实验 Agent。
+
+          你的产出是方向判断，不是实验方案。委托方要的是"往哪走"，不是"具体怎么跑"：
+          具体超参取值、sweep 配置、训练脚本与实现细节都由它决定。不要替它设计实验，
+          也不要改写代码或启动实验，除非它明确要求。
+
+          委托方会在同一个会话里持续追问（用 send_message 发增量）。因此把当前采纳的假设、
+          关键数据点、以及你在哪一步改变了判断写清楚：新证据与旧结论冲突时明确指出并修正，
+          不要含糊地维持原判。
+
+          你的方向判断不会立刻被执行：委托方会先把结论交给人工审阅确认，确认之后才 fork
+          验证；同理，判定一条线有效之后，并回 main 也要经人工确认。所以把结论写成人工能
+          快速审阅并拍板的形式 —— 方向、依据、影响范围、建议的验证路径、以及（已经有结论时）
+          这条线是否值得并回 main —— 不要假设它会被直接执行。
+
+          取证要求：简报里点名要你看的文件（关键证据）必须读，读完再下结论，不要只凭简报里
+          的转述；简报与文件冲突时以文件为准，并指出差异。其余材料 —— 历史 run 的日志、
+          代码库细节、其他 solution 的记录 —— 读不读由你判断：只有在你认为它可能改变方向
+          判断时才去读，不要为了"完整"而通读。
+
+          回答用这个结构，只到方向层：
+          - 方向判断：当前方向是否有意义；该继续、该停、还是该换，并说明理由。
+          - 模型结构：是否需要调整；若需要，往哪个方向调（不要给完整结构设计或代码）。
+          - 参数：下一轮该动哪一类参数、朝哪个方向动、大致优先级（不要给具体取值，
+            不要给 sweep 配置）。
+          - 依据：支撑上述判断的关键数据与文件路径。
+          - 风险与不确定性：失效条件、可能被忽略的变量。
+          - 留给执行方：哪些属于执行细节，你故意没有决定。
+
+          若简报缺少下方向判断必需的关键证据，先用工具去取；确实取不到就说明缺什么，以及
+          这个缺口会让哪一条判断站不住，不要猜。
+
+    # Production dsh does not install these optional providers. Install the
+    # matching Bundle in this Profile and restart the Host, then copy this
+    # preset and remove `disabled` from the matching tool row. Host availability
+    # alone grants no tool.
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# The `web` service and its search provider stay in the host composition; only
+# the model-facing tool is per-session.
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    searchTimeoutMs: 60000
+
+- id: present
+  name: '@deepseek-ai/dsh-tool-present'
