@@ -230,7 +230,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_fork_solution',
       description:
-        'Fork a new experiment solution from a source (main, an active experiment, or an archived/merged one). Creates the git branch + worktree and registers the DSH workspace.',
+        'Fork a new experiment solution from a source (main, an active experiment, or an archived/merged one). Creates the git branch + worktree — the directory is immediately usable from any session in the project; no DSH workspace is registered (one appears only when a human opens a session there).',
       parameters: {
         source: { type: 'string', required: true, description: 'Source solution id or slug (usually "main")' },
         slug: {
@@ -276,7 +276,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_archive_solution',
       description:
-        'Archive a solution: auto-checkpoints dirty work, removes the worktree and DSH workspace, keeps the branch and all experiment records.',
+        'Archive a solution: auto-checkpoints dirty work, removes the worktree, keeps the branch and all experiment records.',
       parameters: {
         solution: { type: 'string', required: true, description: 'Solution id or slug' },
         conclusion: { type: 'string', description: 'Final conclusion note recorded on the solution' },
@@ -306,7 +306,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_merge_solution',
       description:
-        'Merge a source solution into a target. Modes: into-fork (default; source stays active), into-target (source becomes merged, workspace archived), consolidate (squash into one commit). Merge-to-main is target="main" with into-target. Promotion gate: a merge INTO main is refused unless the source was forked from another solution and has at least one succeeded run — experiment first, promote only what worked (allowUnevidenced overrides deliberately).',
+        'Merge a source solution into a target. Modes: into-fork (default; source stays active), into-target (source becomes merged, source archived), consolidate (squash into one commit). Merge-to-main is target="main" with into-target. Promotion gate: a merge INTO main is refused unless the source was forked from another solution and has at least one succeeded run — experiment first, promote only what worked (allowUnevidenced overrides deliberately).',
       parameters: {
         source: { type: 'string', required: true, description: 'Source solution id or slug' },
         target: { type: 'string', required: true, description: 'Target solution id or slug (e.g. "main")' },
@@ -317,7 +317,7 @@ export function apply(ctx: Context): void {
         message: { type: 'string', description: 'Merge / squash commit message' },
         archiveSource: {
           type: 'boolean',
-          description: 'Archive the source workspace after into-target/consolidate (default true)',
+          description: 'Archive the source solution after into-target/consolidate (default true)',
         },
         allowUnevidenced: {
           type: 'boolean',

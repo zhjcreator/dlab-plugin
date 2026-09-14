@@ -167,7 +167,10 @@ describe('host wiring: LabService on real Cordis', () => {
     const main = await surface!.init()
     expect(main.slug).toBe('main')
     expect(main.status).toBe('active')
-    expect(workspaceCalls).toContainEqual(`create:${join(labRoot, 'solutions/main')}`)
+    expect(main.workspaceId).toBeUndefined()
+    // v0.2.4+: init/fork never register DSH workspaces — a workspace appears
+    // only when a human opens a session in the directory
+    expect(workspaceCalls.filter((c) => c.startsWith('create:'))).toEqual([])
   })
 
   it('registers all 20 lab_* tools', () => {

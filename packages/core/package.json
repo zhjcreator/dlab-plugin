@@ -1,8 +1,8 @@
 {
   "name": "@dsh-lab/core",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
-  "description": "Business use-case orchestration for the Deep Learning Lab — Solution lifecycle, Run lifecycle, reconcile (no DSH dependency)",
+  "description": "Business use-case orchestration for the Deep Learning Lab \u2014 Solution lifecycle, Run lifecycle, reconcile (no DSH dependency)",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

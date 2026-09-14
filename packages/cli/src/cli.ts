@@ -57,15 +57,10 @@ export function makeDeps(root: string, projectName: string): LabDeps {
   })
   const runner = new LocalRunner()
   const scheduler = new GpuScheduler()
-  // CLI mode has no DSH workspace registry
+  // CLI mode has no DSH workspace registry — and dlab never registers
+  // workspaces anyway; the port only unregisters (host-side reconcile)
   const workspace = {
-    async createWorkspace() {
-      return undefined
-    },
     async deleteWorkspace() {},
-    async resolveByPath() {
-      return undefined
-    },
   }
   return { config, git, store, runner, scheduler, workspace }
 }
@@ -217,7 +212,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .requiredOption('--target <slug>', 'target solution slug')
     .option('--mode <mode>', 'into-target | into-fork | consolidate', 'into-fork')
     .option('--message <msg>', 'merge/squash commit message')
-    .option('--no-archive', 'keep the source workspace after an into-target/consolidate merge')
+    .option('--no-archive', 'keep the source solution after an into-target/consolidate merge')
     .option(
       '--allow-unevidenced',
       'override the promotion gate: allow merging into main without a succeeded run on the source',

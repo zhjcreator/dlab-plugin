@@ -158,13 +158,19 @@ export interface SchedulerPort {
   snapshot(): Promise<import('@dsh-lab/shared').ResourceView>
 }
 
-/** DSH Workspace registry bridge; null-impl in CLI mode. */
+/**
+ * DSH Workspace registry bridge; null-impl in CLI mode.
+ *
+ * dlab does NOT register solution directories as DSH workspaces (v0.2.4+):
+ * a workspace appears when a human actually opens a session there, never as
+ * a fork side effect. The port survives for the UNREGISTER direction only —
+ * archive/merge/reconcile use it to remove registrations the pre-0.2.4
+ * behavior recorded in `solutions.workspace_id`. Workspaces a human created
+ * by hand are never recorded there and are never touched.
+ */
 export interface WorkspacePort {
-  /** Register a solution directory as a DSH workspace; returns its id or undefined when unavailable. */
-  createWorkspace(path: string, title: string): Promise<string | undefined>
+  /** Remove one workspace registration; unknown ids are an idempotent no-op. */
   deleteWorkspace(workspaceId: string): Promise<void>
-  /** Look up a registered workspace by canonical path. */
-  resolveByPath(path: string): Promise<{ id: string } | undefined>
 }
 
 /** Config the core needs from whichever adapter is hosting it. */

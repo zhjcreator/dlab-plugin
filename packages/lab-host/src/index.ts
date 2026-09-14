@@ -518,10 +518,28 @@ export class LabService extends Service {
         projectName: config.projectName ?? 'Lab',
         workspace: new DshWorkspacePort(ctx),
       })
+      this.scheduleReconcile(this.configuredCore)
       void this.refreshContext(this.configuredCore.root).catch(() => {
         /* uninitialized lab — the placeholder text stands */
       })
     }
+  }
+
+  /**
+   * Boot-time reconciliation, fire-and-forget: today this unregisters the
+   * legacy solution workspaces (pre-0.2.4 fork side effects) recorded in
+   * solutions.workspace_id; with no row carrying an id it is a no-op. Manual
+   * workspaces never carry a row and are never touched.
+   */
+  private scheduleReconcile(core: LabCore): void {
+    void core.reconcile
+      .reconcile()
+      .then(({ repaired }) => {
+        for (const line of repaired) this.ctx.logger.info(`dsh-lab reconcile: ${line}`)
+      })
+      .catch((error) => {
+        this.ctx.logger.warn(`dsh-lab reconcile failed: ${String(error)}`)
+      })
   }
 
   /** The pinned lab root, when the deployment configured one. */
@@ -572,6 +590,7 @@ export class LabService extends Service {
         workspace: new DshWorkspacePort(this.ctx),
       })
       this.detectedCores.set(root, core)
+      this.scheduleReconcile(core)
     }
     return core
   }

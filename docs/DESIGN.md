@@ -61,7 +61,7 @@ Main ────────── Solution A
 | `workspaces/<x>` | `solutions/<x>` | 一个 Solution = 一个 worktree = 一个目录                      |
 | `.dsh-lab/`      | `.dsh-lab/`     | 本项目内部状态目录                                             |
 | Solution = Workspace | **Solution** 是本项目自有概念；**Workspace** 是 DSH Workspace Registry 的持久记录 |
-| 「DSH Workspace」 | `ctx.workspaceRegistry` 注册的 workspace = 一个 Solution 的目录 |
+| 「DSH Workspace」 | `ctx.workspaceRegistry` 注册的 workspace = 一个**人开过 session 的目录**（v0.2.4+ 起与 Solution 无关） |
 
 **最终语义：**
 
@@ -75,10 +75,10 @@ Main ────────── Solution A
 每个 active Solution：
 
 * 是一个 git worktree（由 `.dsh-lab/repo.git` 挂出）
-* 同时通过 `ctx.workspaceRegistry.create(...)` 注册为一个 DSH Workspace
-* 关联到该 Solution 的 Session（DSH 自动挂在该 workspace 下）
+* **不再**注册为 DSH Workspace（v0.2.4+ 修订，见 §4.1）：工作区由「人真的在
+  该目录开过 session」这一事实产生，而不是 fork 的副作用
 
-**这意味着「Active Solution」「Worktree」「DSH Workspace」三者 1:1:1。**
+**「Active Solution」⇔「Worktree」1:1；DSH Workspace 与 Solution 解耦。**
 
 ---
 
@@ -150,10 +150,10 @@ solutions/main  solutions/agm-cosine  solutions/rae-depth4
 
 | 本项目概念 | DSH 概念                          | 关系                                                        |
 | ---------- | --------------------------------- | ----------------------------------------------------------- |
-| Solution   | `ctx.workspaceRegistry` 中的 Workspace | 每个 active Solution 都注册成一个 DSH Workspace               |
-| Run        | DSH 持久 Session                  | 每个 Run 在其 Solution workspace 内开一个 Session 跑训练       |
-| Fork       | `ctx.workspaceRegistry.create()` + git worktree | 都是新 Solution 的副作用                                       |
-| Archive    | `ctx.workspaceRegistry.delete()` + git worktree remove | 都是 archive 的副作用                                       |
+| Solution   | `ctx.workspaceRegistry` 中的 Workspace | **无关联（v0.2.4+）**：dlab 不注册 solution 目录；人在目录里开 session 时 DSH 自己产生 workspace |
+| Run        | DSH 后台 Job（`ctx.jobs`，kind `lab-run`） | detached 进程 + 完成通知/唤醒，见 §18.1                      |
+| Fork       | git worktree                      | 唯一副作用；不碰 workspaceRegistry                            |
+| Archive    | git worktree remove               | 另注销 `solutions.workspace_id` 里遗留的旧注册（v0.2.3 及以前记录的）；人工建的 workspace 永不被碰 |
 | Lab Service | `ctx.lab` (本插件提供)              | 注册到 host composition                                       |
 | Lab Tool   | `ctx.tools.register(lab_*_tool)`  | 暴露给模型的高层语义                                           |
 | Lab UI     | `ctx.slots.register(...)` (Client) | 注册浏览器半 UI                                              |
@@ -312,7 +312,7 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 | `ctx.lab`                    | `lab-host`     | host      | 全 process 唯一实例                   |
 | `ctx.labClientRpc`           | `lab-host`     | host      | `/dlab` channel handle                |
 | `ctx.labHostConfig`          | `lab-host`     | host      | 配置 + `solutionRoot` 解析            |
-| `ctx.workspaceRegistry.create/delete` 的桥接 | `lab-host` | host      | 只 host 调, 不能放 preset              |
+| `ctx.workspaceRegistry.delete` 的桥接（仅注销遗留注册） | `lab-host` | host      | 只 host 调, 不能放 preset              |
 | Lab 浏览器半 slots (`sidebar.*` / `shell.overlay` / `conversation.*`) | `lab-client` | client | `dsh.client.inject` 入口, slots.register |
 | `systemPrompt.section()` 注册 Lab Context | `lab-host`    | host      | 写到 host 的 prompt 段落；按 assembly 的 agent session cwd 解析对应 lab；用 scope 局部覆盖时由 preset 切 |
 | `shellEnv.register(DSH_LAB_*)`           | `lab-host`    | host      | host plane 注册,跨 session 共享；值按每次 shell 调用的 agent session cwd 解析 |
@@ -422,8 +422,8 @@ cwd 的来源：工具执行与 shell 调用取 `exec.agent.session.header.cwd`�
 
 ```ts
 type SolutionStatus =
-  | 'active'      // 有 branch + worktree + DSH Workspace
-  | 'archived'    // 有 branch；无 worktree；无 DSH Workspace
+  | 'active'      // 有 branch + worktree（v0.2.4+：与 DSH Workspace 无关）
+  | 'archived'    // 有 branch；无 worktree
   | 'merged'      // 合并到其它 Solution；branch 保留；worktree 已移除
   | 'broken';     // DB 与 Git/FS 不一致；UI 显示 ⚠，提供 Repair
 
@@ -441,7 +441,7 @@ interface Solution {
 
   branch: string;              // main 或 exp/<slug>，不可变
   worktreePath?: string;       // solutions/<slug>，仅 active 时存在
-  workspaceId?: string;        // ctx.workspaceRegistry 注册后的 id，仅 active
+  workspaceId?: string;        // 遗留：v0.2.3 及以前 fork 注册的 DSH Workspace id；reconcile 清扫后恒为空
 
   parentSolutionId?: string;
   forkCommit?: string;
@@ -504,8 +504,8 @@ interface Solution {
 
 状态约束：
 
-* `ACTIVE` ⇔ `branch 存在 ∧ worktree 存在 ∧ DSH Workspace 注册`
-* `ARCHIVED`/`MERGED` ⇔ `branch 存在 ∧ worktree 不存在 ∧ 无 DSH Workspace`
+* `ACTIVE` ⇔ `branch 存在 ∧ worktree 存在`（v0.2.4+：不再看 DSH Workspace）
+* `ARCHIVED`/`MERGED` ⇔ `branch 存在 ∧ worktree 不存在`
 * `BROKEN` ⇔ DB 与 Git/DSH Registry 任一不一致；不静默修复
 
 ---
@@ -536,9 +536,10 @@ git worktree add solutions/<slug> exp/<slug>
   ↓
 INSERT solution(...)
   ↓
-ctx.workspaceRegistry.create(solutions/<slug>, <name>)  → 记 workspaceId
-  ↓
 ctx.emit('solution/forked', solutionId)
+
+（v0.2.4+：不再调用 `ctx.workspaceRegistry.create` —— 工作区列表只反映人真实
+开过 session 的目录；fork 出来没人用的方向不产生任何 DSH 侧记录。）
 ```
 
 原子性：`git branch` / `worktree add` 先做，再写 DB；中途失败要 rollback（删除已创建的 branch / worktree）。
@@ -569,7 +570,7 @@ Solution.active = true
   ↓
 git worktree remove solutions/<slug>
   ↓
-ctx.workspaceRegistry.delete(workspaceId)
+若 solutions.workspace_id 仍记录旧注册 → ctx.workspaceRegistry.delete(workspaceId)
   ↓
 status = archived
 ```
@@ -584,9 +585,10 @@ Branch 保留；Experiments 全部保留；DSH Sessions 在该 Solution 内的�
 
 ```bash
 git worktree add solutions/<slug> exp/<slug>
-ctx.workspaceRegistry.create(solutions/<slug>, <name>)
 status = active
 ```
+
+（v0.2.4+：restore 与 fork 一样不再注册 DSH Workspace。）
 
 ---
 
@@ -1054,7 +1056,7 @@ interface RunResourceRequest {
 
 `projects`、`solutions`、`solution_relations`、`runs`、`run_metrics`、`run_tags`、`run_profiles`、`environment_snapshots`、`gpu_reservations`、`events` —— 字段基本沿用原方案，但有这些修正：
 
-* `solutions.workspace_id TEXT` —— 关联 `ctx.workspaceRegistry` 的 Workspace id
+* `solutions.workspace_id TEXT` —— 遗留字段：v0.2.3 及以前 fork 注册的 DSH Workspace id；host 启动时 ReconcileService 清扫并置空，此后恒为 NULL
 * `solutions.worktree_path TEXT` —— 相对 solution-root 的 `solutions/<slug>`
 * 所有路径都用 `solution_root + relative`，启动时校验不越界
 * `runs.run_dir TEXT` —— 相对路径 `experiments/run-NNNNNN/`
@@ -1124,7 +1126,7 @@ run_profiles:
    * 默认 `git branch -f main <init-commit>`
 3. 在 `.dsh-lab/repo.git` 上 worktree 出 `solutions/main`（branch=`main`）
 4. INSERT `solutions` row：`role=main, slug=main, branch=main, status=active`
-5. `ctx.workspaceRegistry.create(solutions/main, "Main")`
+5. ~~`ctx.workspaceRegistry.create(solutions/main, "Main")`~~ （v0.2.4+ 移除：init 不注册 workspace）
 6. INSERT `projects` row
 7. 初始化默认 run profiles
 
@@ -1416,7 +1418,7 @@ Git integration tests + crash tests + concurrency tests
 LabService (ctx.lab)
 Remote API (/dlab channel via ctx.connection.rpc.handle)
 Agent Tools (lab_*)
-DSH Workspace bridge (fork→ctx.workspaceRegistry.create / archive→delete)
+DSH Workspace bridge (delete only: archive/merge/reconcile unregister legacy registrations; v0.2.4+ no longer registers)
 shellEnv 注册 DSH_LAB_*
 ```
 
@@ -1538,7 +1540,7 @@ merge conflict 工作流
 
 | 用途                       | 真实入口                                                                    |
 | -------------------------- | --------------------------------------------------------------------------- |
-| Workspace 注册              | `ctx.workspaceRegistry.create(path, title?)` 返回 Workspace；`delete(id)`  |
+| Workspace 注册              | `ctx.workspaceRegistry.create(path, title?)` 返回 Workspace；`delete(id)`（dlab v0.2.4+ 只用 delete） |
 | Solution 状态展示在 sidebar | `dsh-client-ui-workspace` 注册 `sidebar.workspaces` slot                   |
 | 启动 Run                    | `ctx.subprocess.spawn(spec)` 返回 SubprocessHandle；`spec.argv` 数组；不 shell-interpret |
 | 注入 DSH_LAB_* 环境        | `ctx.shellEnv.register({ name, variables: { DSH_LAB_*: { description } }, resolve(execution) })` |

@@ -1,7 +1,14 @@
 /**
- * WorkspacePort implementation over the DSH workspace registry. Every active
- * Solution directory registers as a DSH workspace; archive removes the
- * registration (sessions stay, becoming Ungrouped).
+ * WorkspacePort implementation over the DSH workspace registry — the
+ * UNREGISTER direction only.
+ *
+ * dlab never registers a solution directory as a DSH workspace (v0.2.4+): a
+ * workspace appears when a human actually opens a session in that directory,
+ * never as a fork side effect. What remains here is the cleanup of the
+ * pre-0.2.4 behavior: archive/merge/reconcile remove registrations recorded
+ * in solutions.workspace_id. Sessions that lived in an unregistered
+ * workspace stay, becoming Ungrouped; workspaces a human created by hand
+ * carry no row in the lab DB and are never touched.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -10,9 +17,7 @@ import type { WorkspacePort } from '@dsh-lab/core'
 
 /** Minimal structural view of ctx.workspaceRegistry this bridge needs. */
 interface WorkspaceRegistryShape {
-  create(path: string, title?: string): Promise<{ id: string; path: string; title: string }>
   delete(id: string): Promise<boolean>
-  resolveByPath(path: string): Promise<{ id: string; path: string } | undefined>
 }
 
 export class DshWorkspacePort implements WorkspacePort {
@@ -22,31 +27,11 @@ export class DshWorkspacePort implements WorkspacePort {
     return this.ctx.workspaceRegistry as unknown as WorkspaceRegistryShape
   }
 
-  async createWorkspace(path: string, title: string): Promise<string | undefined> {
-    try {
-      const ws = await this.registry.create(path, title)
-      return ws.id
-    } catch {
-      // registry unavailable or path missing — the solution still works
-      // without a DSH workspace; reconcile reports the gap.
-      return undefined
-    }
-  }
-
   async deleteWorkspace(workspaceId: string): Promise<void> {
     try {
       await this.registry.delete(workspaceId)
     } catch {
-      // already gone
-    }
-  }
-
-  async resolveByPath(path: string): Promise<{ id: string } | undefined> {
-    try {
-      const ws = await this.registry.resolveByPath(path)
-      return ws ? { id: ws.id } : undefined
-    } catch {
-      return undefined
+      // already gone — unregistering is idempotent at the call sites
     }
   }
 }

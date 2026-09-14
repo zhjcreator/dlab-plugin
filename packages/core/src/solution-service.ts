@@ -178,11 +178,6 @@ export class SolutionService {
     }
     await this.store.upsertSolution(main)
     await this.store.setMainSolution(projectId, main.id)
-    const workspaceId = await this.workspace.createWorkspace(this.solutionDir('main'), 'Main')
-    if (workspaceId) {
-      main.workspaceId = workspaceId
-      await this.store.upsertSolution(main)
-    }
     await this.store.appendEvent({ type: 'SolutionForked', entityType: 'solution', entityId: main.id, payload: { init: true } })
     return main
   }
@@ -197,7 +192,7 @@ export class SolutionService {
     return this.requireSolution(idOrSlug)
   }
 
-  /** Fork a new experiment solution from a source (branch + worktree + DB + DSH workspace). */
+  /** Fork a new experiment solution from a source (branch + worktree + DB row). */
   async fork(input: ForkSolutionInput): Promise<Solution> {
     const source = await this.requireSolution(input.sourceSolutionId)
     assertSlug(input.slug)
@@ -248,9 +243,6 @@ export class SolutionService {
       createdAt: now,
       updatedAt: now,
     }
-    await this.store.upsertSolution(solution)
-    const workspaceId = await this.workspace.createWorkspace(this.solutionDir(input.slug), input.name)
-    if (workspaceId) solution.workspaceId = workspaceId
     await this.store.upsertSolution(solution)
     await this.store.appendEvent({
       type: 'SolutionForked',
@@ -344,17 +336,13 @@ export class SolutionService {
     await this.git.addWorktree(this.solutionDir(solution.slug), solution.branch)
     this.docs?.materialize(solution)
     const head = await this.git.branchHead(solution.branch)
-    const workspaceId = await this.workspace.createWorkspace(
-      this.solutionDir(solution.slug),
-      solution.name,
-    )
     const now = Date.now()
     const restored: Solution = {
       ...solution,
       status: 'active',
       headCommit: head,
       worktreePath: `${this.deps.config.solutionsDir}/${solution.slug}`,
-      workspaceId: workspaceId ?? undefined,
+      workspaceId: undefined,
       archivedAt: undefined,
       updatedAt: now,
     }
