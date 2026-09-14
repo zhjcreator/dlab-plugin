@@ -206,6 +206,7 @@ export interface SolutionView {
   id: string
   slug: string
   name: string
+  description?: string
   status: SolutionStatus
   role: SolutionRole
   branch: string
@@ -226,8 +227,14 @@ export interface RunView {
   solutionId: string
   solutionSlug: string
   snapshotCommit: string
+  /** Branch HEAD at launch — runs sharing this value ran from the same code state. */
+  sourceHeadCommit?: string
   status: RunStatus
   command: string[]
+  /** Human-readable title chosen at launch (undefined when untitled). */
+  title?: string
+  /** Run directory relative to the project root (experiments/run-NNNNNN). */
+  runDir?: string
   gpuIds?: number[]
   exitCode?: number
   createdAt: number

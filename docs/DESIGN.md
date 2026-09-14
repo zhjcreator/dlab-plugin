@@ -314,8 +314,8 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 | `ctx.labHostConfig`          | `lab-host`     | host      | 配置 + `solutionRoot` 解析            |
 | `ctx.workspaceRegistry.create/delete` 的桥接 | `lab-host` | host      | 只 host 调, 不能放 preset              |
 | Lab 浏览器半 slots (`sidebar.*` / `shell.overlay` / `conversation.*`) | `lab-client` | client | `dsh.client.inject` 入口, slots.register |
-| `systemPrompt.section()` 注册 Lab Context | `lab-host`    | host      | 写到 host 的 prompt 段落；用 scope 局部覆盖时由 preset 切 |
-| `shellEnv.register(DSH_LAB_*)`           | `lab-host`    | host      | 跨 session 共享, host plane           |
+| `systemPrompt.section()` 注册 Lab Context | `lab-host`    | host      | 写到 host 的 prompt 段落；按 assembly 的 agent session cwd 解析对应 lab；用 scope 局部覆盖时由 preset 切 |
+| `shellEnv.register(DSH_LAB_*)`           | `lab-host`    | host      | host plane 注册,跨 session 共享；值按每次 shell 调用的 agent session cwd 解析 |
 | Agent preset 中的 tool 注册                | `preset-lab`  | agent     | 多个 session 共享 host tools 注册,必须放在 preset realm 之外(preset 仅消费, 不发布服务) |
 
 ### 5.3 为什么不把 `core/`/`git/`/`store/` 拆成独立 npm 包
@@ -398,13 +398,23 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 | ------ | -------- | ---------- | ---------- | ----- |
 | `ctx.lab` Service | `LabService extends Service` | — | — | host 唯一实例 |
 | `/dlab` RPC channel | `ctx.connection.rpc.handle('/dlab', dispatch)` | `ctx.connection.rpc.call('/dlab', …)` | — | 信封 `RpcResult<T>` |
-| `DSH_LAB_*` env | `ctx.shellEnv.register` | — | — | 每个 shell 调用注入 |
-| lab context prompt | `systemPrompt.section()` | — | — | 随 workspace 切换变化 |
-| `lab_*` tools | 注册（execute 内调 `ctx.lab`） | — | `tool-dlab-lab` 行 grant 到 preset | preset 只放 tool 行 |
+| `DSH_LAB_*` env | `ctx.shellEnv.register` | — | — | 每次 shell 调用按 agent session cwd 解析后注入 |
+| lab context prompt | `systemPrompt.section()` | — | — | 按 assembly 的 agent session cwd 解析对应 lab |
+| `lab_*` tools | 注册（execute 按该调用的 agent session cwd 经 `ctx.lab.surface()` 解析） | — | `tool-dlab-lab` 行 grant 到 preset | preset 只放 tool 行 |
 | Lab 入口按钮 + 面板 | — | slots.register（名以 inspect 为准） | — | `dsh.client` 行 |
 | Agent preset | — | — | `agent.cordis.yml` | 不发布服务 → 无需 realm |
 
 > 原则（与 §5.2 服务归属一致）：提供服务的行一律在 host plane（`lab-host`）；preset-plane 只放「消费 host tools 注册」的 tool 行；浏览器半只放 slot 注册。`preset-lab` 不提供任何服务，因此其 tool 行不需要 isolate realm（skill: editing-cordis-compositions）。
+
+### 5.7 Lab 根目录解析（per-session cwd，v0.1.3 起）
+
+所有消费方（`lab_*` 工具、`lab:context` prompt 段、`DSH_LAB_*` shell 变量、浏览器面板 RPC）都通过同一条 `LabService.surface(cwd)` 解析，规则一致：
+
+1. **可选的 `solutionRoot` 配置**仅在会话 cwd 位于其内（或调用方无 cwd，如无 agent 的执行）时生效——部署可以用它钉一个主 lab；
+2. 否则从 cwd **向上查找**最近的持有 `.dsh-lab/lab.sqlite` 的目录（`findLabRoot`，上限 15 层），每个检测到的 lab 有自己的 `LabCore`/surface（detected lab 的项目名从其 store 权威读取）；
+3. 都没有 → 该会话**无 lab**：`lab_status` 软失败（`initialized:false` + hint），其余工具抛清晰错误，prompt 段退化为两行 no-lab 提示，`DSH_LAB_*` 变量省略。
+
+cwd 的来源：工具执行与 shell 调用取 `exec.agent.session.header.cwd`；prompt assembly 取 `AssembleContext.agent`（dsh-agent 的 runtime 增强）；浏览器面板在 RPC payload 里显式携带。`cordis.patch.yml` 不再写死任何根目录——在哪个项目里打开会话，lab 就跟到哪个项目。
 
 ---
 

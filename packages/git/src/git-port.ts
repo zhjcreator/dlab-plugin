@@ -327,7 +327,12 @@ export class LocalGitPort implements GitPort {
     a: string,
     b: string,
   ): Promise<{ changedFiles: { status: 'A' | 'M' | 'D'; path: string }[]; patch?: string }> {
-    const range = baseRef ? `${baseRef}...${b}` : `${a}...${b}`
+    // With a base (solution diff): three-dot — changes on b since the fork
+    // point. Without a base (run-to-run snapshot diff): two-dot direct tree
+    // comparison — sibling snapshots share the branch HEAD as merge base,
+    // so three-dot would silently degrade to "changes since HEAD" and
+    // misreport uncommitted files as added instead of modified.
+    const range = baseRef ? `${baseRef}...${b}` : `${a}..${b}`
     const { stdout: nameStatus } = await this.run(['diff', '--name-status', range])
     const changedFiles = nameStatus
       .split('\n')

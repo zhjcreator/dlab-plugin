@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/store",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "SQLite persistence (better-sqlite3) implementing @dsh-lab/core StorePort",
   "type": "module",

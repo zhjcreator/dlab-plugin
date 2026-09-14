@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/shared",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "private": true,
   "description": "Pure domain types, id/path validation, and error base classes for dlab-plugin (no DSH dependency)",
   "type": "module",

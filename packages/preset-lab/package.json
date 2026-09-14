@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/preset",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "DSH agent preset that grants every session the lab_* tools + lab context",
   "type": "module",

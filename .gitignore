@@ -17,6 +17,7 @@ pnpm-debug.log*
 # build outputs
 lib/
 dist/
+dist-tb/
 *.tsbuildinfo
 
 # SQLite / lab state (never commit user labs)

@@ -8,15 +8,17 @@
 #   lab-shell-env     → DSH_LAB_* shell variables (needs lab + shellEnv)
 #   lab-system-prompt → lab:context prompt section (needs lab + systemPrompt)
 #
-# solutionRoot must point at the user's lab root (the directory holding
-# solutions/, experiments/, .dsh-lab/).
+# Lab resolution is PER SESSION cwd — no root is hardcoded here. Every
+# consumer (agent tools, prompt section, shell env, browser panel) resolves
+# the lab project that owns the session's working directory: any directory
+# holding an initialized .dsh-lab/lab.sqlite (walking up from the cwd) is a
+# lab. To pin one primary lab for the deployment, set solutionRoot /
+# projectName on the lab-service row; the pinned root wins only for sessions
+# whose cwd sits inside it (and for cwd-less callers).
 
 - insert:
     - id: lab-service
       name: '@dsh-lab/host'
-      config:
-        solutionRoot: /home2/zhanghanjin/WorkSpace/dsh-scholar
-        projectName: dsh-scholar
 
     - id: lab-tools
       name: '@dsh-lab/host/tools'

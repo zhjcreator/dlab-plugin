@@ -1,8 +1,8 @@
 {
   "name": "@dsh-lab/client",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
-  "description": "DSH browser-surface bundle for the Deep Learning Lab — Lab panel as a better-sidebar tab (when present) with a standalone header-button fallback",
+  "description": "DSH browser-surface bundle for the Deep Learning Lab — DLab page tab in the official native right Sidebar with a conversation-header quick-entry button",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -25,7 +25,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
       ]
     }
   },

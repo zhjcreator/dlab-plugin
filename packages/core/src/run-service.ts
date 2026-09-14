@@ -49,11 +49,45 @@ export interface StartRunInput {
   tags?: string[]
 }
 
+/**
+ * Observer of an in-process run process exit. Fired AFTER the run record is
+ * finalized (terminal status persisted), so the listener can read the
+ * authoritative final state via {@link RunService.get}. Adopted runs (spawned
+ * by a previous host process) never fire this — their exit is unobserved.
+ */
+export type RunExitListener = (runId: string, code: number | null) => void
+
 export class RunService {
   constructor(private readonly deps: LabDeps) {}
 
+  private readonly exitListeners = new Set<RunExitListener>()
+
   private get config() {
     return this.deps.config
+  }
+
+  /**
+   * Subscribe to in-process run process exits. The listener fires after the
+   * run record reached its terminal status, so reading the run inside the
+   * listener yields the final state. Errors thrown by a listener are
+   * contained. Returns an unsubscriber.
+   */
+  onRunExit(listener: RunExitListener): () => void {
+    this.exitListeners.add(listener)
+    return () => {
+      this.exitListeners.delete(listener)
+    }
+  }
+
+  /** Contained fan-out to the exit listeners (listener errors never throw). */
+  private notifyExit(runId: string, code: number | null): void {
+    for (const listener of [...this.exitListeners]) {
+      try {
+        listener(runId, code)
+      } catch {
+        /* a broken observer must not break finalize bookkeeping */
+      }
+    }
   }
 
   /** Absolute run directory (experiments/run-NNNNNN). */
@@ -194,9 +228,11 @@ export class RunService {
       env: procEnv,
       logDir: resolve(runDirAbs, 'logs'),
       onExit: (code) => {
-        void this.finalize(id, code).catch(() => {
-          /* finalize failures are logged by the host adapter */
-        })
+        void this.finalize(id, code)
+          .catch(() => {
+            /* finalize failures are logged by the host adapter */
+          })
+          .then(() => this.notifyExit(id, code))
       },
     })
 

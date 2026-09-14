@@ -1,12 +1,15 @@
 /**
  * './shell-env' row: contributes DSH_LAB_* variables to every model shell
- * call so agents in the lab know which root they operate on. Per-run
- * variables (DSH_LAB_RUN_DIR etc.) are injected into the RUN process by the
- * runner in Phase 3, not here.
+ * call so agents know which lab root they operate on. The values resolve
+ * PER EXECUTION from the calling agent's session cwd — a session whose
+ * workspace belongs to no lab project gets no DSH_LAB_* variables at all.
+ * Per-run variables (DSH_LAB_RUN_DIR etc.) are injected into the RUN process
+ * by the runner in Phase 3, not here.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import { agentSessionCwd } from './index.js'
 
 export const name = 'dsh-lab-shell-env'
 export const inject = ['lab', 'shellEnv']
@@ -16,15 +19,20 @@ export function apply(ctx: Context): void {
     name: 'dsh-lab',
     variables: {
       DSH_LAB_ROOT: {
-        description: 'Absolute root of the Deep Learning Lab project (solutions/, experiments/, .dsh-lab/).',
+        description:
+          "Absolute root of the lab project owning the session's workspace (solutions/, experiments/, .dsh-lab/); absent when the workspace belongs to no lab.",
       },
       DSH_LAB_PROJECT: {
-        description: 'Display name of the Deep Learning Lab project.',
+        description: "Display name of the lab project owning the session's workspace.",
       },
     },
-    resolve: () => ({
-      DSH_LAB_ROOT: ctx.lab.root,
-      DSH_LAB_PROJECT: ctx.lab.projectName,
-    }),
+    resolve: (execution) => {
+      const surface = ctx.lab.surface(agentSessionCwd((execution as { agent?: unknown }).agent))
+      if (!surface) return {}
+      return {
+        DSH_LAB_ROOT: surface.root,
+        DSH_LAB_PROJECT: surface.projectName,
+      }
+    },
   })
 }

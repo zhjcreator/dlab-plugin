@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/runner",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "Local process runner for experiment Runs — wraps ctx.subprocess in host mode, plain child_process in CLI mode",
   "type": "module",

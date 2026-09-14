@@ -4,6 +4,14 @@ Monorepo for a DSH plugin managing parallel deep-learning research solutions:
 solution lifecycle (fork / checkpoint / archive / restore / merge), experiment
 runs with immutable git snapshots, and a shared Python environment.
 
+Lab resolution is **per session cwd** (v0.1.3+): every consumer — `lab_*`
+tools, the `lab:context` prompt section, `DSH_LAB_*` shell variables, the
+browser panel — operates on the lab project that owns the session's working
+directory (any directory holding an initialized `.dsh-lab/lab.sqlite`).
+No root is hardcoded; a deployment may optionally pin a primary
+`solutionRoot` that wins only for sessions inside it. See
+`docs/DESIGN.md` §5.7.
+
 See `docs/DESIGN.md` for the full design specification.
 
 ## Layout
