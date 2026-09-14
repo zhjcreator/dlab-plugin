@@ -31,11 +31,42 @@ function jsonRender(_args: unknown, value: unknown): ContentBlock[] {
 }
 
 /**
+ * Normalize a value for the model-tool wire: recursively drop `undefined`-valued
+ * properties and turn `undefined` array items into null — exactly what
+ * JSON.stringify transmits. Domain views use the TypeScript idiom for absent
+ * optional fields (`parentSlug?: string` assigned `undefined`), but dsh-tools
+ * validates tool output as LOSSLESS JSON, where an own property holding
+ * `undefined` fails the whole output with "value is not lossless JSON".
+ * Values JSON could not represent losslessly anyway (Date, BigInt, class
+ * instances, NaN, …) pass through untouched, so the runtime check still fails
+ * loudly on genuinely malformed data instead of silently mangling it.
+ */
+function jsonSafe(value: unknown): any {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : jsonSafe(item)))
+  }
+  if (typeof value === 'object' && value !== null) {
+    const proto = Object.getPrototypeOf(value)
+    if (proto === Object.prototype || proto === null) {
+      const out: Record<string, unknown> = {}
+      for (const key of Object.keys(value)) {
+        const item = (value as Record<string, unknown>)[key]
+        if (item !== undefined) out[key] = jsonSafe(item)
+      }
+      return out
+    }
+  }
+  return value
+}
+
+/**
  * Domain views cross into the wire as unconstrained JSON (`{ type: 'json' }`
- * output schema); this cast marks that boundary explicitly.
+ * output schema); this boundary applies JSON serialization semantics — absent
+ * optional fields are simply omitted — so every lab_* tool returns lossless
+ * JSON.
  */
 function json<T>(value: T): any {
-  return value
+  return jsonSafe(value)
 }
 
 /** The error every lab tool raises when the session's workspace has no lab. */
@@ -138,9 +169,13 @@ export function apply(ctx: Context): void {
       },
       output: { schema: { type: 'json' }, render: jsonRender },
       async execute(args, exec) {
-        return json({
-          runs: await surfaceFor(lab, exec).runs.list(args.solution ? { solutionId: args.solution } : undefined),
-        })
+        const surface = surfaceFor(lab, exec)
+        // the parameter accepts id OR slug (per its description); the store
+        // filters on the internal solution id, so resolve the slug first
+        const filter = args.solution
+          ? { solutionId: (await surface.solutions.get(args.solution)).id }
+          : undefined
+        return json({ runs: await surface.runs.list(filter) })
       },
     }),
   )
