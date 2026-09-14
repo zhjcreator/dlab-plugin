@@ -511,6 +511,22 @@ describe('lab-client browser bundle', () => {
     expect(model.rows[model.tipRow[0]!]!.lane).toBe(0)
   })
 
+  it('the panel exposes the Docs tab reading the shared docs over RPC', () => {
+    const { loaded } = loadBundle()
+    const exports = loaded[0]!.factory((spec) => {
+      if (spec === 'react') return fakeReact()
+      if (spec === 'react-dom') return { createPortal: (el) => el }
+      throw new Error('unexpected')
+    })
+    const src = BUNDLE
+    // the tab is reachable and only ever reads (no write endpoint is called)
+    expect(src).toContain("['docs', 'Docs']")
+    expect(src).toContain("call('docs.list')")
+    expect(src).toContain("call('docs.read'")
+    expect(src).not.toContain("call('docs.write'")
+    expect(typeof exports.apply).toBe('function')
+  })
+
   it('buildModel returns a safe empty model without data', () => {
     const { loaded } = loadBundle()
     const exports = loaded[0]!.factory((spec) => {

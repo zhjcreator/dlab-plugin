@@ -358,6 +358,102 @@ export class DocsService {
     return result
   }
 
+  // ── migration: existing in-solution documents → shared docs ─────────────
+
+  /**
+   * Plan (and optionally apply) the move of documents that currently live
+   * INSIDE a solution worktree into the shared docs directory.
+   *
+   * Why a plan first: the files are tracked by that solution's branch, so the
+   * move spans three steps — copy to the root, commit the removal on the
+   * branch, and link the worktree — and an operator must see exactly which
+   * files move before any of that happens.
+   */
+  async planMigration(input: {
+    solutionId: string
+    /** Directory inside the solution worktree (default: the docs dir). */
+    path?: string
+  }): Promise<{
+    solution: string
+    from: string
+    files: string[]
+    conflicts: string[]
+    target: string
+    /** Path prefix the files land under, relative to the shared docs dir. */
+    prefix: string
+  }> {
+    const solution = await this.requireSolution(input.solutionId)
+    const rel = input.path ?? this.config.docsDir
+    const source = join(this.solutionDir(solution), rel)
+    const files = this.walkFiles(source)
+    // the standard solution docs dir maps onto the shared docs ROOT; any other
+    // directory keeps its own name so its origin stays visible
+    const prefix = rel === this.config.docsDir ? '' : rel
+    const conflicts = files.filter((file) => this.exists(join(prefix, file)))
+    return {
+      solution: solution.slug,
+      from: rel,
+      files,
+      conflicts,
+      target: this.sharedDir,
+      prefix,
+    }
+  }
+
+  /**
+   * Apply a migration plan: copy every file into the shared docs directory
+   * (leaving the solution's copy in place — the caller decides whether to
+   * commit the removal) and version the result.
+   */
+  async applyMigration(input: {
+    solutionId: string
+    path?: string
+    /** Remove the copied files from the solution worktree (default false). */
+    move?: boolean
+  }): Promise<{ copied: string[]; skipped: string[]; version?: string }> {
+    const solution = await this.requireSolution(input.solutionId)
+    const rel = input.path ?? this.config.docsDir
+    const source = join(this.solutionDir(solution), rel)
+    const files = this.walkFiles(source)
+    const prefix = rel === this.config.docsDir ? '' : rel
+    const copied: string[] = []
+    const skipped: string[] = []
+    for (const file of files) {
+      const from = join(source, file)
+      const to = join(prefix, file)
+      const stat = statSync(from)
+      // a smaller existing copy is never overwritten silently
+      if (this.exists(to) && statSync(this.resolveInside(to)).size > stat.size) {
+        skipped.push(file)
+        continue
+      }
+      this.write(to, readFileSync(from, 'utf8'))
+      copied.push(file)
+    }
+    if (input.move) {
+      for (const file of copied) {
+        rmSync(join(source, file), { force: true })
+      }
+      // prune the emptied directory tree, keeping the path itself
+      this.pruneEmpty(source)
+    }
+    const version = await this.commitVersion(
+      `[dsh-lab] docs: migrate ${copied.length} document(s) from ${solution.slug}/${rel}`,
+    )
+    return { copied, skipped, ...(version ? { version } : {}) }
+  }
+
+  /** Remove empty subdirectories under `dir`, keeping `dir` itself. */
+  private pruneEmpty(dir: string): void {
+    if (!existsSync(dir)) return
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const child = join(dir, entry.name)
+      this.pruneEmpty(child)
+      if (readdirSync(child).length === 0) rmSync(child, { recursive: true, force: true })
+    }
+  }
+
   // ── internals ───────────────────────────────────────────────────────────
 
   private solutionDir(solution: Pick<Solution, 'slug'>): string {

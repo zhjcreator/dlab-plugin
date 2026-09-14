@@ -411,6 +411,30 @@ export function apply(ctx: Context): void {
     }),
   )
 
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_migrate_docs',
+      description:
+        'Move documents that currently live INSIDE a solution worktree into the project-wide shared docs directory (docs/ at the project root). Use it once on an existing project whose charter/roadmap/reports were written inside a solution: without an explicit "apply" it returns the plan (files, collisions, target) and changes nothing. After migrating, the files are reachable from every solution through local/docs and are versioned under refs/dsh/docs.',
+      parameters: {
+        solution: { type: 'string', required: true, description: 'Solution whose documents should move' },
+        path: { type: 'string', description: 'Directory inside the solution (default: docs)' },
+        apply: { type: 'boolean', description: 'Perform the migration (default false: plan only)' },
+        move: { type: 'boolean', description: 'Also delete the migrated files from the solution worktree' },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args, exec) {
+        const surface = surfaceFor(lab, exec)
+        if (args.apply !== true) {
+          return json(await surface.docs.migrationPlan({ solutionId: args.solution, path: args.path }))
+        }
+        return json(
+          await surface.docs.migrate({ solutionId: args.solution, path: args.path, move: args.move }),
+        )
+      },
+    }),
+  )
+
   // ── run tools (Phase 3) ───────────────────────────────────────────────────
 
   ctx.tools.register(

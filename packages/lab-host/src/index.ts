@@ -331,6 +331,19 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
         versionRef: core.docs.versionRef,
         commits: await core.docs.history(typeof limit === 'number' ? limit : 20),
       }),
+      /** Dry-run plan for moving in-solution documents into the shared docs. */
+      migrationPlan: async (input: { solutionId: string; path?: string }): Promise<unknown> =>
+        core.docs.planMigration({ solutionId: input.solutionId, path: input.path }),
+      /** Apply the migration (copy; `move` also removes the solution copies). */
+      migrate: async (input: { solutionId: string; path?: string; move?: boolean }): Promise<unknown> => {
+        const result = await core.docs.applyMigration({
+          solutionId: input.solutionId,
+          path: input.path,
+          move: input.move,
+        })
+        hooks.onMutation()
+        return result
+      },
     },
 
     // ── resources / environment ────────────────────────────────────────────
@@ -591,6 +604,31 @@ export class LabService extends Service {
     const root = this.rootFor(cwd)
     if (!root) return NO_LAB_HINT
     return this.ensureCache(root).text
+  }
+
+  /**
+   * Adopt an EXISTING lab project into the shared-docs layout (DESIGN §26):
+   * make sure `docs/` exists at the root, link it into every active solution
+   * worktree, record the directory on the project row and version it.
+   *
+   * This is what makes the partition retrofittable: a project whose documents
+   * already sit inside `solutions/main/docs` keeps them where they are (the
+   * root docs/ directory is the same directory main already carries, because
+   * main's worktree lives at solutions/main — its docs/ stays main's copy and
+   * becomes the shared source of truth once the links exist).
+   */
+  async adoptDocsLayout(rootArg?: string): Promise<{ root: string; repaired: string[]; version?: string } | undefined> {
+    const root = rootArg ?? this.configuredCore?.root
+    if (!root) return undefined
+    const core = this.coreFor(root)
+    await core.docs.ensureLayout()
+    const project = await core.deps.store.getProject()
+    if (project && project.docs !== core.config.docsDir) {
+      await core.deps.store.setProjectDocs(project.id, core.config.docsDir)
+    }
+    const repaired = await core.docs.repairLinks()
+    const version = await core.docs.commitVersion('[dsh-lab] docs: adopt shared documents layout')
+    return { root, repaired, ...(version ? { version } : {}) }
   }
 
   /**

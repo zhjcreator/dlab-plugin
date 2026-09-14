@@ -51,6 +51,8 @@ type Endpoint =
   | 'docs.promote'
   | 'docs.repair'
   | 'docs.history'
+  | 'docs.migrationPlan'
+  | 'docs.migrate'
 
 /**
  * Single-switch dispatch over every /dlab endpoint. Never throws.
@@ -234,6 +236,18 @@ export async function dispatch(
 
       case 'docs.history':
         return ok(await svc.docs.history(typeof p.limit === 'number' ? p.limit : 20))
+
+      case 'docs.migrationPlan':
+        return ok(await svc.docs.migrationPlan({ solutionId: String(p.solution), path: typeof p.path === 'string' ? p.path : undefined }))
+
+      case 'docs.migrate':
+        return ok(
+          await svc.docs.migrate({
+            solutionId: String(p.solution),
+            path: typeof p.path === 'string' ? p.path : undefined,
+            move: p.move === true,
+          }),
+        )
 
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)

@@ -314,6 +314,21 @@ export async function runCli(argv: string[]): Promise<void> {
     })
 
   docs
+    .command('adopt')
+    .description('adopt an existing lab into the shared-docs layout (create docs/, link every worktree, version it)')
+    .action(async () => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      await docSvc.ensureLayout()
+      const repaired = await docSvc.repairLinks()
+      const version = await docSvc.commitVersion('[dsh-lab] docs: adopt shared documents layout')
+      console.log(`shared docs: ${docSvc.sharedDir}`)
+      console.log(`linked     : ${repaired.length ? repaired.join(', ') : '(already linked)'}`)
+      console.log(`version    : ${version ? version.slice(0, 8) : '(not versioned)'}`)
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
     .command('repair')
     .description('re-create the local/docs link in every active solution worktree')
     .action(async () => {
@@ -321,6 +336,32 @@ export async function runCli(argv: string[]): Promise<void> {
       const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
       const repaired = await docSvc.repairLinks()
       console.log(repaired.length ? `repaired: ${repaired.join(', ')}` : 'all links healthy')
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('migrate <solution>')
+    .description('move documents that live inside a solution into the shared docs directory')
+    .option('--path <dir>', 'directory inside the solution (default: docs)')
+    .option('--apply', 'perform the migration (default: print the plan only)')
+    .option('--move', 'also remove the migrated files from the solution worktree')
+    .action(async (solution: string, opts: { path?: string; apply?: boolean; move?: boolean }) => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      const plan = await docSvc.planMigration({ solutionId: solution, path: opts.path })
+      console.log(`plan: ${plan.solution}/${plan.from} → ${plan.target}`)
+      for (const f of plan.files) {
+        const clash = plan.conflicts.includes(f) ? '  (already present in shared docs)' : ''
+        console.log(`  ${f}${clash}`)
+      }
+      if (plan.files.length === 0) console.log('  (nothing to migrate)')
+      if (!opts.apply) {
+        console.log('\ndry run — re-run with --apply to perform it')
+      } else {
+        const result = await docSvc.applyMigration({ solutionId: solution, path: opts.path, move: opts.move })
+        console.log(`\nmigrated ${result.copied.length} file(s)${result.skipped.length ? `, skipped ${result.skipped.length}` : ''}`)
+        console.log(`version: ${result.version ? result.version.slice(0, 8) : '(none)'}`)
+      }
       ;(deps.store as SqliteStore).close()
     })
 

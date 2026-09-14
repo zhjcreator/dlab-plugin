@@ -157,6 +157,30 @@ describe('shared documents (DESIGN §26)', () => {
     expect(versioned.some((p) => p === 'docs/.dlab/state.json')).toBe(false)
   })
 
+  it('migrates in-solution documents into the shared docs (plan → apply)', async () => {
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-migrate', name: 'Doc Migrate' })
+    const localDocs = join(labRoot, 'solutions/doc-migrate/docs')
+    mkdirSync(localDocs, { recursive: true })
+    writeFileSync(join(localDocs, 'legacy-report.md'), '# legacy report\n')
+
+    // the plan changes nothing
+    const plan = await docs.planMigration({ solutionId: 'doc-migrate' })
+    expect(plan.files).toContain('legacy-report.md')
+    expect(plan.prefix).toBe('')
+    expect(docs.exists('legacy-report.md')).toBe(false)
+
+    const applied = await docs.applyMigration({ solutionId: 'doc-migrate', move: true })
+    expect(applied.copied).toContain('legacy-report.md')
+    expect(applied.version).toBeTruthy()
+    // it landed at the shared ROOT (not docs/docs/) and is versioned
+    expect(readFileSync(join(labRoot, 'docs/legacy-report.md'), 'utf8')).toContain('legacy report')
+    expect(existsSync(join(localDocs, 'legacy-report.md'))).toBe(false)
+
+    // a second migration has nothing left to do
+    const second = await docs.planMigration({ solutionId: 'doc-migrate' })
+    expect(second.files).toEqual([])
+  })
+
   it('repairLinks re-materializes a link that was replaced by a real directory', async () => {
     // simulate a hand-made copy standing where the link belongs
     const link = forkLink('doc-promote')

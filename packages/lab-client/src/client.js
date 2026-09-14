@@ -1032,6 +1032,88 @@ window.__ModuleLoader__.load({
 			return h('div', { style: { padding: '4px 0' } }, children);
 		}
 
+		/**
+		 * Shared documents tab: the project-wide docs that live at the project
+		 * root and are reached from every solution through `local/docs`. The
+		 * list is flat (path + size + age); selecting one previews its text.
+		 * Read-only like the rest of the panel — writes go through the agent.
+		 */
+		function DocsTab(props) {
+			var call = props.call;
+			var st0 = useState({ loading: true, error: null, docs: [], state: {} });
+			var st = st0[0];
+			var set = st0[1];
+			var sel0 = useState(null);
+			var sel = sel0[0];
+			var setSel = sel0[1];
+			var body0 = useState({ loading: false, error: null, text: '', truncated: false });
+			var body = body0[0];
+			var setBody = body0[1];
+
+			useEffect(function () {
+				if (!call) return undefined;
+				var alive = true;
+				call('docs.list').then(function (res) {
+					if (!alive) return;
+					if (res.ok) set({ loading: false, error: null, docs: res.value.docs || [], state: res.value.state || {} });
+					else set({ loading: false, error: res.error.message, docs: [], state: {} });
+				});
+				return function () { alive = false; };
+			}, [call]);
+
+			useEffect(function () {
+				if (!call || !sel) return undefined;
+				var alive = true;
+				setBody({ loading: true, error: null, text: '', truncated: false });
+				call('docs.read', { path: sel }).then(function (res) {
+					if (!alive) return;
+					if (res.ok) setBody({ loading: false, error: null, text: res.value.text || '', truncated: !!res.value.truncated });
+					else setBody({ loading: false, error: res.error.message, text: '', truncated: false });
+				});
+				return function () { alive = false; };
+			}, [call, sel]);
+
+			if (st.loading) {
+				return h('div', { style: { padding: '10px 12px', color: C.tx2, fontSize: 11 } }, 'Loading documents…');
+			}
+			if (st.error) {
+				return h('div', { style: { padding: '10px 12px', color: C.tx2, fontSize: 11 } }, st.error);
+			}
+			if (!st.docs.length) {
+				return h('div', { style: { padding: '10px 12px', color: C.tx2, fontSize: 11 } },
+					'No shared documents yet — ask the agent to write one (lab_write_doc).');
+			}
+
+			var sharedDir = st.state && st.state.docsDir ? st.state.docsDir : 'docs';
+			var rows = st.docs.map(function (d) {
+				var on = sel === d.path;
+				return h('div', {
+					key: d.path,
+					'class': 'dlabg-row' + (on ? ' dlabg-sel' : ''),
+					style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 24, padding: '2px 12px', cursor: 'pointer' },
+					onClick: function () { setSel(on ? null : d.path); },
+					title: d.path,
+				},
+					h('span', { style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace,monospace', fontSize: 10.5, color: 'var(--dsw-alias-label-primary,#1a1a2e)' } }, d.path),
+					h('span', { style: { color: C.tx2, fontSize: 10, flex: '0 0 auto' } }, (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B')),
+					h('span', { style: { color: C.tx2, fontSize: 10, flex: '0 0 auto', whiteSpace: 'nowrap' } }, fmtDate(d.mtime)),
+				);
+			});
+
+			return h('div', { style: { padding: '4px 0 8px' } },
+				h('div', { style: { padding: '6px 12px 2px', fontSize: 10, color: C.tx2 } },
+					'project-wide · shared by every solution via local/docs · ' + sharedDir + '/'),
+				rows,
+				sel ? h('div', { style: { margin: '6px 12px 0', padding: '6px 8px', borderRadius: 6, background: 'var(--dsw-alias-bg-layer-2,#f0f1f3)' } },
+					h('div', { style: { fontFamily: 'ui-monospace,monospace', fontSize: 10, color: C.tx2, marginBottom: 4 } },
+						sharedDir + '/' + sel + (body.truncated ? ' · truncated' : '')),
+					body.loading ? h('div', { style: { fontSize: 10, color: C.tx2 } }, 'loading…')
+						: body.error ? h('div', { style: { fontSize: 10, color: C.tx2 } }, body.error)
+							: h('pre', { style: Object.assign({}, LOG_PRE, { maxHeight: 260 }) }, body.text),
+				) : null,
+			);
+		}
+
 		function ActivityTab(props) {
 			var events = props.model.events || [];
 			if (!events.length) {
@@ -1207,7 +1289,7 @@ window.__ModuleLoader__.load({
 				m.rows.forEach(function (r, i) { if (r.kind === 'run' && r.run.id === selState.run.id) selIdx = i; });
 			}
 
-			var tabs = [['overview', 'Overview'], ['runs', 'Runs'], ['activity', 'Activity']];
+			var tabs = [['overview', 'Overview'], ['runs', 'Runs'], ['docs', 'Docs'], ['activity', 'Activity']];
 
 			// breadcrumb: project ▸ <current> — always visible, so the way back
 			// never depends on remembering how you got here
@@ -1328,6 +1410,7 @@ window.__ModuleLoader__.load({
 				h('div', { style: { flex: '1 1 0', minHeight: 140, overflowY: 'auto', background: C.card, borderTop: '1px solid ' + C.bd } },
 					tab === 'overview' ? h(OverviewTab, { model: m, selected: selState, onPickSolution: pickSolution, onBack: clearSelection, onFollow: followSelection, call: call, width: listW })
 						: tab === 'runs' ? h(RunsTab, { model: m, selected: selState, onPick: pickRun })
+						: tab === 'docs' ? h(DocsTab, { call: call })
 						: h(ActivityTab, { model: m })),
 			);
 		}
