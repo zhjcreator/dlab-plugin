@@ -92,7 +92,9 @@ describe('e2e: solution lifecycle', () => {
   })
 
   it('E: merge to main (into-target) archives source workspace, keeps branch', () => {
-    const out = lab('solution', 'merge', 'pgu-cosine', '--target', 'main', '--mode', 'into-target').stdout
+    const out = lab(
+      'solution', 'merge', 'pgu-cosine', '--target', 'main', '--mode', 'into-target', '--allow-unevidenced',
+    ).stdout
     expect(out).toContain('source now merged')
     expect(existsSync(join(labRoot, 'solutions/pgu-cosine'))).toBe(false)
     expect(readFileSync(join(labRoot, 'solutions/main/pgu.txt'), 'utf8')).toContain('rae_depth = 4')
@@ -136,7 +138,9 @@ describe('e2e: solution lifecycle', () => {
     lab('solution', 'checkpoint', 'squash-src', '-m', 's1')
     writeFileSync(join(labRoot, 'solutions/squash-src/s.txt'), 'v1\nv2\n')
     lab('solution', 'checkpoint', 'squash-src', '-m', 's2')
-    const out = lab('solution', 'merge', 'squash-src', '--target', 'main', '--mode', 'consolidate').stdout
+    const out = lab(
+      'solution', 'merge', 'squash-src', '--target', 'main', '--mode', 'consolidate', '--allow-unevidenced',
+    ).stdout
     expect(out).toContain('source now merged')
     expect(readFileSync(join(labRoot, 'solutions/main/s.txt'), 'utf8')).toBe('v1\nv2\n')
   })

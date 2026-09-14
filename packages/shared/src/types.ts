@@ -165,6 +165,27 @@ export interface MergeSolutionInput {
   mode?: MergeMode
   message?: string
   archiveSource?: boolean
+  /**
+   * Explicitly promote a line whose runs produced no successful evidence (all
+   * failed/canceled, or none at all). Default false: merging into the mainline
+   * requires at least one succeeded run on the source — experiment first,
+   * promote only what worked.
+   */
+  allowUnevidenced?: boolean
+}
+
+/** One source run's contribution to the promotion gate (see SolutionService.merge). */
+export interface MergeEvidence {
+  /** Runs recorded for the source solution. */
+  runs: number
+  /** Runs that ended `succeeded` — the evidence a promotion needs. */
+  succeeded: number
+  /** Runs that ended failed/canceled/lost. */
+  failed: number
+  /** Runs still queued/running/starting. */
+  live: number
+  /** Whether the source line was forked from another solution. */
+  forked: boolean
 }
 
 export interface MergeResult {

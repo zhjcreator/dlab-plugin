@@ -270,14 +270,9 @@ window.__ModuleLoader__.load({
 			// ── rows ──────────────────────────────────────────────────────────
 			var rows = [];
 
-			runs.forEach(function (r) {
-				if (laneOf[r.solutionSlug] === undefined) return;
-				rows.push({
-					kind: 'run', time: r.createdAt, lane: laneOf[r.solutionSlug], slug: r.solutionSlug,
-					run: r, hash: r.snapshotCommit || '',
-					title: r.title || prettyCommand(r.command, project.root) || r.id,
-				});
-			});
+			// Lifecycle events only: a run is NOT a history row — runs live in
+			// the Runs tab. The graph answers "what did the research do"
+			// (init / fork / merge / archive), not "what executed".
 
 			// fork rows — synthesized for every experiment so each lane has a
 			// visible branch point off its parent lane
@@ -340,7 +335,7 @@ window.__ModuleLoader__.load({
 				if (r.kind === 'archive' && topIdx[r.lane] === undefined) { topIdx[r.lane] = i; topIsTerminal[r.lane] = true; }
 			});
 			for (var l = 1; l < laneCount; l++) {
-				// tip row: first (newest) run row, else the fork row itself
+				// tip row: the lane's newest activity (merge > run > fork)
 				var tip = -1;
 				for (var ri = 0; ri < rows.length; ri++) {
 					var rr = rows[ri];
@@ -357,12 +352,10 @@ window.__ModuleLoader__.load({
 					topIsTerminal[l] = false;
 				}
 			}
-			// main's tip: its topmost run/merge/init row (a merge commit is
-			// main's head when it is the newest main-lane row)
-			for (var ri3 = 0; ri3 < rows.length; ri3++) {
-				var k0 = rows[ri3].kind;
-				if (rows[ri3].lane === 0 && (k0 === 'run' || k0 === 'merge' || k0 === 'init')) { tipRow[0] = ri3; break; }
-			}
+			// main's tip: its newest row (a merge commit is main's head when it
+			// is the newest main-lane row; with no merges that is init itself)
+			// — never overwritten, so an experiment never claims main's pill
+			tipRow[0] = rows.length > 0 ? rows.length - 1 : 0;
 
 			// branch name owning each lane (drives the tip branch pill)
 			var branchByLane = { 0: 'main' };
@@ -543,16 +536,19 @@ window.__ModuleLoader__.load({
 			}
 			if (n.dirty) chips.push(h('span', { key: 'd', style: chipStyle(['#9a6700', 'rgba(154,103,0,0.13)']) }, 'dirty'));
 
-			// branch pill on each lane's tip row; milestone label on merges
-			var pillStyle = { display: 'inline-block', fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 9, lineHeight: 1, padding: '3px 6px', borderRadius: 999, background: 'rgba(127,127,127,0.13)', color: 'var(--dsw-alias-label-secondary,#556)', marginLeft: 6, verticalAlign: 1 };
-			var pill = null;
-			if (row.kind === 'merge' && row.vLabel) {
-				pill = h('span', { key: 'v', style: Object.assign({}, pillStyle, { color: MAIN_COLOR, fontWeight: 700 }) }, row.vLabel);
-			}
-			if (m.tipRow[row.lane] === i && m.branchByLane[row.lane]) {
-				var bpill = h('span', { key: 'b', style: pillStyle }, m.branchByLane[row.lane]);
-				pill = pill ? [pill, bpill] : bpill;
-			}
+				// branch pill on each lane's tip row; milestone label on merges
+				var pillStyle = { display: 'inline-block', fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 9, lineHeight: 1, padding: '3px 6px', borderRadius: 999, background: 'rgba(127,127,127,0.13)', color: 'var(--dsw-alias-label-secondary,#556)', marginLeft: 6, verticalAlign: 1 };
+				var pill = null;
+				// a milestone label wins, but the branch pill still shows when the
+				// merge row is also a lane tip (no run rows on that lane)
+				var bpillNeeded = m.tipRow[row.lane] === i && m.branchByLane[row.lane];
+				var bpill = bpillNeeded ? h('span', { key: 'b', style: pillStyle }, m.branchByLane[row.lane]) : null;
+				if (row.kind === 'merge' && row.vLabel) {
+					pill = h('span', { key: 'v', style: Object.assign({}, pillStyle, { color: MAIN_COLOR, fontWeight: 700 }) }, row.vLabel);
+					if (bpill) pill = [pill, bpill];
+				} else {
+					pill = bpill;
+				}
 
 			// message text
 			var msg = '';
@@ -664,8 +660,7 @@ window.__ModuleLoader__.load({
 				h('div', { style: { fontStyle: 'italic', color: 'var(--dsw-alias-label-primary,#1a1a2e)', lineHeight: 1.5, wordBreak: 'break-word', whiteSpace: 'pre-wrap' } }, props.v));
 		}
 
-		/** Change-file chip: colored status letter + mono path. */
-		function FileChip(props) {
+		/** Change-file chip: colored status letter + mono path. */		function FileChip(props) {
 			var sc = props.status === 'A' ? '#1a7f37' : props.status === 'D' ? '#cf222e' : '#9a6700';
 			return h('span', {
 				title: props.path,
@@ -679,6 +674,50 @@ window.__ModuleLoader__.load({
 			},
 				h('span', { style: { color: sc, fontWeight: 700, marginRight: 5, flex: '0 0 auto' } }, props.status),
 				h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, props.path));
+		}
+
+		/**
+		 * Promotion gate: fork first, merge to main only with evidence.
+		 *
+		 * Mirrors the lab workflow the tools enforce — an experiment line is
+		 * created by a FORK, and it may only be merged into `main` after it has
+		 * produced at least one succeeded run. A failed/canceled-only line is
+		 * shown as not mergeable, so the panel answers "can I promote this?"
+		 * without reading the CLI.
+		 */
+		function MergeGate(props) {
+			var sol = props.sol || {};
+			var runs = props.runs || [];
+			if (!sol.id || sol.role === 'main') return null;
+
+			var isFork = !!sol.parent && sol.parent !== sol.id;
+			var succeeded = runs.filter(function (r) { return r.status === 'succeeded'; }).length;
+			var failed = runs.filter(function (r) { return r.status === 'failed' || r.status === 'canceled' || r.status === 'lost'; }).length;
+			var live = runs.filter(function (r) { return r.status === 'running' || r.status === 'starting' || r.status === 'queued'; }).length;
+
+			var verdict, tone;
+			if (sol.mergedInto) { verdict = 'merged into ' + sol.mergedInto; tone = '#0969da'; }
+			else if (!isFork) { verdict = 'not forked — fork before experimenting'; tone = '#9a6700'; }
+			else if (succeeded === 0) { verdict = live > 0 ? 'running — no evidence yet' : 'no successful run — not mergeable'; tone = '#9a6700'; }
+			else { verdict = 'eligible to merge (' + succeeded + ' successful run' + (succeeded > 1 ? 's' : '') + ')'; tone = '#1a7f37'; }
+
+			function step(label, state, detail) {
+				var col = state === 'ok' ? '#1a7f37' : state === 'bad' ? '#cf222e' : state === 'todo' ? '#9a6700' : GRAY;
+				return h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.6 } },
+					h('span', { style: { width: 7, height: 7, borderRadius: 7, background: col, flex: '0 0 auto' } }),
+					h('span', { style: { color: 'var(--dsw-alias-label-primary,#1a1a2e)', flex: '0 0 auto' } }, label),
+					h('span', { style: { color: C.tx2, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, detail || ''));
+			}
+
+			return h('div', { style: { marginTop: 10 } },
+				h('div', { style: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: C.tx2, marginBottom: 4 } }, 'Promotion'),
+				step('fork', isFork ? 'ok' : 'todo', isFork ? ('from ' + sol.parent) : 'no parent — fork first'),
+				step('experiment', runs.length > 0 ? 'ok' : 'todo',
+					runs.length + ' run' + (runs.length === 1 ? '' : 's') + (live ? ' · ' + live + ' live' : '') + (failed ? ' · ' + failed + ' failed/canceled' : '')),
+				step('evidence', succeeded > 0 ? 'ok' : (live > 0 ? 'wait' : 'bad'),
+					succeeded > 0 ? (succeeded + ' succeeded') : 'no successful run yet'),
+				step('merge to main', sol.mergedInto ? 'ok' : (succeeded > 0 ? 'wait' : 'bad'), verdict),
+			);
 		}
 
 		var LOG_PRE = {
@@ -746,8 +785,10 @@ window.__ModuleLoader__.load({
 			var body;
 
 			// detail header: explicit way back to the project summary (the same
-			// toggle remains available by re-clicking the row)
+			// toggle remains available by re-clicking the row, and the breadcrumb
+			// above the list always carries a Back button)
 			function detailHeader(key, titleText, chipEl) {
+				var follow = props.onFollow;
 				return h('div', { key: key, style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
 					h('button', {
 						title: 'Back to the project overview', onClick: props.onBack,
@@ -757,6 +798,16 @@ window.__ModuleLoader__.load({
 							cursor: 'pointer', padding: '4px 9px', borderRadius: 6,
 						},
 					}, '← Back'),
+					follow
+						? h('button', {
+							title: 'Open the solution this line belongs to', onClick: follow,
+							style: {
+								font: 'inherit', fontSize: 11, lineHeight: 1, flex: '0 0 auto',
+								border: '1px solid ' + C.bd, background: C.nested, color: C.tx2,
+								cursor: 'pointer', padding: '4px 9px', borderRadius: 6,
+							},
+						}, 'solution →')
+						: null,
 					h('span', {
 						title: titleText,
 						style: { fontWeight: 700, color: C.tx, minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -787,6 +838,7 @@ window.__ModuleLoader__.load({
 
 			if (sel && sel.kind === 'run') {
 				var r = sel.run;
+				var rsol = m.bySlug[r.solutionSlug] || {};
 				body = [
 					detailHeader('t', r.title || prettyCommand(r.command, root) || r.id, h(StatusChip, { status: r.status })),
 					h(KV, { key: 'id', k: 'run', v: r.id }),
@@ -801,6 +853,9 @@ window.__ModuleLoader__.load({
 						key: 'met', k: 'metrics',
 						v: Object.keys(r.summaryMetrics).map(function (k) { return k + '=' + r.summaryMetrics[k]; }).join('  '),
 					}) : null,
+					// promotion gate — a run's outcome decides whether its line of
+					// work may merge into main
+					h(MergeGate, { key: 'gate', sol: rsol, runs: (m.runs || []).filter(function (x) { return x.solutionSlug === r.solutionSlug; }) }),
 					h(RunLogSection, { key: 'log', call: call, run: r }),
 				];
 			} else if (sel && sel.slug && m.bySlug[sel.slug]) {
@@ -811,6 +866,8 @@ window.__ModuleLoader__.load({
 					n.description ? h('div', { key: 'd', style: { color: 'var(--dsw-alias-label-primary,#1a1a2e)', lineHeight: 1.5, marginBottom: 4, wordBreak: 'break-word' } }, n.description) : null,
 					n.hypothesis ? h(Quote, { key: 'h', k: 'hypothesis', v: n.hypothesis, color: '#8250df' }) : null,
 					n.conclusion ? h(Quote, { key: 'c', k: 'conclusion', v: n.conclusion, color: '#1a7f37' }) : null,
+					// promotion gate — the fork/evidence/merge state of this line
+					h(MergeGate, { key: 'gate', sol: n, runs: (m.runs || []).filter(function (x) { return x.solutionSlug === sel.slug; }) }),
 					// what this solution changes relative to the mainline
 					n.role !== 'main' ? h('div', { key: 'chg', style: { marginTop: 10 } },
 						h('div', { style: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: C.tx2, marginBottom: 4 } },
@@ -891,40 +948,67 @@ window.__ModuleLoader__.load({
 			// multi-run groups so stray single runs stay uncluttered.
 			var groups = [];
 			var byKey = {};
+			var order = {};
 			runs.forEach(function (r) {
 				var sweep = null;
 				(r.tags || []).forEach(function (t) {
 					if (sweep === null && String(t).indexOf('sweep/') === 0) sweep = String(t);
 				});
+				// runs of different solutions NEVER share a group key, so
+				// several active experiments stay apart in the list
 				var key = r.solutionSlug + '|' + (sweep || 'snap:' + (r.sourceHeadCommit || r.snapshotCommit));
 				if (!byKey[key]) {
-					byKey[key] = { key: key, sweep: sweep, slug: r.solutionSlug, head: r.sourceHeadCommit, runs: [] };
+					byKey[key] = { key: key, sweep: sweep, slug: r.solutionSlug, runs: [] };
+					order[key] = groups.length;
 					groups.push(byKey[key]);
 				}
 				byKey[key].runs.push(r);
+			});
+
+			// sequence index for the sweep chip ("3/4 variants")
+			groups.forEach(function (g) { g.runs.forEach(function (r, i) { r._seq = i + 1; }); });
+
+			// Lanes with activity first — the active experiment's group is not
+			// pushed under main's history by a newer main run.
+			var laneOf = props.model.laneOf;
+			groups.sort(function (a, b) {
+				var la = laneOf[a.slug], lb = laneOf[b.slug];
+				var na = la === undefined ? 999 : la;
+				var nb = lb === undefined ? 999 : lb;
+				if (na !== nb) return na - nb;
+				return (order[a.key] || 0) - (order[b.key] || 0);
 			});
 
 			var children = [];
 			groups.forEach(function (g) {
 				var named = g.sweep || g.runs.length >= 2;
 				if (named) {
-					var label = g.sweep ? g.sweep : '@ ' + hashShort(g.head || '');
-					var gl = props.model.laneOf[g.slug];
-					children.push(h('div', { key: 'h' + g.key, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 2px' } },
+					var gl = laneOf[g.slug];
+					var head = g.runs[0] && (g.runs[0].title || prettyCommand(g.runs[0].command, props.model.project && props.model.project.root));
+					children.push(h('div', { key: 'h' + g.key, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 2px' } },
 						h('span', { 'class': 'dlabg-badge', style: { background: laneColor(gl === undefined ? 1 : gl) }, title: g.slug }, initials(g.slug)),
-						h('span', { style: { fontWeight: 700, fontSize: 11, color: 'var(--dsw-alias-label-primary,#1a1a2e)' } }, label),
-						h('span', { style: { fontSize: 10, color: C.tx2 } }, g.runs.length + ' run' + (g.runs.length > 1 ? 's' : '') + ' · ' + g.slug),
+						h('span', { style: { fontWeight: 700, fontSize: 11, color: 'var(--dsw-alias-label-primary,#1a1a2e)' } }, g.slug),
+						g.sweep ? h('span', { style: { fontSize: 10, color: C.tx2, fontFamily: 'ui-monospace,monospace' } }, g.sweep) : null,
+						h('span', { style: { fontSize: 10, color: C.tx2 } }, g.runs.length + ' run' + (g.runs.length > 1 ? 's' : '')),
+						h('span', {
+							title: head || '',
+							style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: C.tx2, textAlign: 'right' },
+						}, head || ''),
 					));
 				}
-				g.runs.forEach(function (r) {
+				g.runs.forEach(function (r, ri) {
 					var dotCol = GRAY;
 					if (r.status === 'running' || r.status === 'starting') dotCol = '#0969da';
 					else if (r.status === 'succeeded') dotCol = '#1a7f37';
 					else if (r.status === 'failed') dotCol = '#cf222e';
 					else if (r.status === 'queued') dotCol = '#9a6700';
 					var selRun = props.selected && props.selected.kind === 'run' && props.selected.run.id === r.id;
-					// per-run param tags (sweep variants)
+					// per-run param tags (sweep variants), plus the run ordinal
+					// inside its group — makes the "which variant is this" clear
 					var pills = [];
+					if (named) {
+						pills.push(h('span', { key: 'seq', style: { fontFamily: 'ui-monospace,monospace', fontSize: 9, color: C.tx2, marginLeft: 6, flex: '0 0 auto' } }, (ri + 1) + '/' + g.runs.length));
+					}
 					(r.tags || []).forEach(function (t, ti) {
 						var tag = String(t);
 						if (/^[^/=\s]+=[^\s]+$/.test(tag)) {
@@ -1102,6 +1186,21 @@ window.__ModuleLoader__.load({
 				setSel(null);
 			}
 
+			/** Follow a fork/merge row to the solution it points at. */
+			function followSelection() {
+				var s = selState;
+				if (!s) return;
+				if (s.kind === 'solution' && s.parent && s.parent !== s.slug) {
+					pickSolution(s.parent);
+					return;
+				}
+				if (s.kind === 'solution' && m.bySlug[s.slug] && m.bySlug[s.slug].mergedInto) {
+					pickSolution(m.bySlug[s.slug].mergedInto);
+					return;
+				}
+				if (s.kind === 'run') pickSolution(s.slug);
+			}
+
 			// selected graph row index (for highlight)
 			var selIdx = -1;
 			if (selState && selState.kind === 'run') {
@@ -1109,6 +1208,52 @@ window.__ModuleLoader__.load({
 			}
 
 			var tabs = [['overview', 'Overview'], ['runs', 'Runs'], ['activity', 'Activity']];
+
+			// breadcrumb: project ▸ <current> — always visible, so the way back
+			// never depends on remembering how you got here
+			var crumbTail = null;
+			if (selState && selState.kind === 'run') {
+				crumbTail = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 } },
+					h('span', { style: { color: C.tx2 } }, '▸'),
+					h('span', {
+						title: selState.slug,
+						style: { fontFamily: 'ui-monospace,monospace', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+					}, selState.slug),
+					h('span', { style: { color: C.tx2 } }, '▸'),
+					h('span', { style: { fontFamily: 'ui-monospace,monospace', fontSize: 10.5, color: C.tx2 } }, selState.run.id));
+			} else if (selState && selState.kind === 'solution') {
+				crumbTail = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 } },
+					h('span', { style: { color: C.tx2 } }, '▸'),
+					h('span', {
+						title: selState.slug,
+						style: { fontFamily: 'ui-monospace,monospace', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+					}, selState.slug));
+			}
+
+			var crumb = h('div', {
+				style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, padding: '4px 12px', background: C.card, borderBottom: '1px solid ' + C.bd },
+			},
+				selState
+					? h('button', {
+						title: 'Back to the project overview', onClick: clearSelection,
+						style: {
+							font: 'inherit', fontSize: 11, lineHeight: 1, flex: '0 0 auto',
+							border: '1px solid ' + C.bd, background: C.nested, color: C.tx,
+							cursor: 'pointer', padding: '3px 8px', borderRadius: 6,
+						},
+					}, '← Back')
+					: null,
+				h('button', {
+					title: 'Project overview', onClick: clearSelection,
+					style: {
+						font: 'inherit', fontSize: 10.5, flex: '0 1 auto', minWidth: 0,
+						border: 'none', background: 'transparent', color: selState ? C.tx2 : C.tx,
+						cursor: 'pointer', padding: 0, fontWeight: selState ? 400 : 600,
+						overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+					},
+				}, m.project.name || 'Lab'),
+				crumbTail,
+			);
 
 			return h('div', {
 				style: {
@@ -1138,6 +1283,9 @@ window.__ModuleLoader__.load({
 						},
 					}, '⟳'),
 				),
+
+				// breadcrumb — the always-visible way back from any detail view
+				crumb,
 
 				// commit list — content-sized (scrolls when history grows);
 				// leftover space flows to the detail section below
@@ -1178,7 +1326,7 @@ window.__ModuleLoader__.load({
 
 				// tab content — takes all remaining space
 				h('div', { style: { flex: '1 1 0', minHeight: 140, overflowY: 'auto', background: C.card, borderTop: '1px solid ' + C.bd } },
-					tab === 'overview' ? h(OverviewTab, { model: m, selected: selState, onPickSolution: pickSolution, onBack: clearSelection, call: call, width: listW })
+					tab === 'overview' ? h(OverviewTab, { model: m, selected: selState, onPickSolution: pickSolution, onBack: clearSelection, onFollow: followSelection, call: call, width: listW })
 						: tab === 'runs' ? h(RunsTab, { model: m, selected: selState, onPick: pickRun })
 						: h(ActivityTab, { model: m })),
 			);

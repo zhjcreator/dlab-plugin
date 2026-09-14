@@ -201,10 +201,20 @@ export async function runCli(argv: string[]): Promise<void> {
     .option('--mode <mode>', 'into-target | into-fork | consolidate', 'into-fork')
     .option('--message <msg>', 'merge/squash commit message')
     .option('--no-archive', 'keep the source workspace after an into-target/consolidate merge')
+    .option(
+      '--allow-unevidenced',
+      'override the promotion gate: allow merging into main without a succeeded run on the source',
+    )
     .action(
       async (
         source: string,
-        opts: { target: string; mode: 'into-target' | 'into-fork' | 'consolidate'; message?: string; archive: boolean },
+        opts: {
+          target: string
+          mode: 'into-target' | 'into-fork' | 'consolidate'
+          message?: string
+          archive: boolean
+          allowUnevidenced?: boolean
+        },
       ) => {
         const root = rootOf()
         const { service, deps } = makeSolutionService(root, 'lab')
@@ -214,6 +224,7 @@ export async function runCli(argv: string[]): Promise<void> {
           mode: opts.mode,
           message: opts.message,
           archiveSource: opts.archive,
+          allowUnevidenced: opts.allowUnevidenced,
         })
         console.log(
           `merged ${source} → ${opts.target} (${result.mode}): commit ${result.mergeCommit.slice(0, 8)}, source now ${result.sourceStatusAfter}`,

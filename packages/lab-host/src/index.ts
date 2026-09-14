@@ -144,6 +144,11 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
         const s = await core.solutions.get(idOrSlug)
         return core.solutionView(s)
       },
+      /** Run evidence for one solution — the promotion gate's raw material. */
+      evidence: async (idOrSlug: string): Promise<import('@dsh-lab/shared').MergeEvidence> => {
+        const s: Solution = await core.solutions.get(idOrSlug)
+        return core.solutions.mergeEvidence(s.id)
+      },
       fork: async (input: {
         sourceSolutionId: string
         slug: string
@@ -319,12 +324,16 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
         })
 
         // nodes
-        const nodes: Record<string, unknown>[] = views.map((v) => {
+        const nodes: Record<string, unknown>[] = []
+        for (const v of views) {
           const parentMetric = v.parentSlug ? bestMetric[v.parentSlug] : bestMetric['main']
           const myMetric = bestMetric[v.slug]
           const delta = myMetric !== undefined && parentMetric !== undefined
             ? myMetric - parentMetric : undefined
-          return {
+          // promotion evidence per line (runs / succeeded / forked), so the
+          // panel can show whether a merge into main is allowed yet
+          const evidence = await core.solutions.mergeEvidence(v.id).catch(() => undefined)
+          nodes.push({
             id: v.slug, label: v.name || v.slug,
             description: v.description,
             role: v.role, status: v.status,
@@ -336,8 +345,9 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
             runCount: v.runCount,
             dirty: v.dirty,
             lastRunAt: v.lastRunAt,
-          }
-        })
+            evidence,
+          })
+        }
 
         // edges
         const edges: Record<string, unknown>[] = []

@@ -384,7 +384,11 @@ describe('lab-client browser bundle', () => {
     expect(pc([], '/lab')).toBe('')
     expect(pc(undefined, '/lab')).toBe('')
     // the model title still wins: buildModel keeps r.title over the command
-    const model = (exports.buildModel as (data: unknown) => { rows: { kind: string; title?: string }[] })({
+    const model = (exports.buildModel as (data: unknown) => {
+      rows: { kind: string; lane: number; title?: string }[]
+      tipRow: Record<number, number>
+      runs: { title?: string }[]
+    })({
       project: { name: 'proj', root: '/lab' },
       graph: { milestones: [], nodes: [{ id: 'main', role: 'main', status: 'active', branch: 'main', headCommit: 'a1' }] },
       runs: [
@@ -393,9 +397,10 @@ describe('lab-client browser bundle', () => {
       ],
       events: [],
     })
-    const titles = model.rows.filter((r) => r.kind === 'run').map((r) => r.title)
-    expect(titles).toContain('my title')
-    expect(titles).toContain('python t.py')
+    // the graph carries no run rows; the Runs tab renders run titles, and
+    // model.runs is what it reads
+    expect(model.rows.some((r) => r.kind === 'run')).toBe(false)
+    expect((model as unknown as { runs: { title?: string }[] }).runs.map((r) => r.title)).toContain('my title')
   })
 
   it('buildModel merges runs + events into lane rows (fork/merge/init)', () => {
@@ -441,22 +446,23 @@ describe('lab-client browser bundle', () => {
     expect(model.laneOf['exp-a']).toBe(1)
     expect(model.counts).toEqual({ solutions: 2, running: 0 })
 
-    // newest first: merge (t0+60), run_2 (t0+40), run_1 (t0+20), fork (t0+10), init
-    expect(model.rows.map((r) => r.kind)).toEqual(['merge', 'run', 'run', 'fork', 'init'])
+    // lifecycle only, newest first: merge (t0+60), fork (t0+10), init —
+    // runs are NOT history rows (they live in the Runs tab)
+    expect(model.rows.map((r) => r.kind)).toEqual(['merge', 'fork', 'init'])
     expect(model.rows[0]!.lane).toBe(0) // merge dot lands on main
     expect(model.rows[0]!.srcLane).toBe(1)
     expect(model.rows[0]!.vLabel).toBe('v2')
-    expect(model.rows[1]!.slug).toBe('exp-a')
-    expect(model.rows[2]!.slug).toBe('main')
-    expect(model.rows[3]!.kind).toBe('fork')
-    expect(model.rows[3]!.parentLane).toBe(0)
-    expect(model.rows[4]!.kind).toBe('init')
+    expect(model.rows[1]!.kind).toBe('fork')
+    expect(model.rows[1]!.parentLane).toBe(0)
+    expect(model.rows[2]!.kind).toBe('init')
 
     // lane 1 spans from its fork row (bottom) to its merge row (top)
     expect(model.topIdx[1]).toBe(0)
-    expect(model.botIdx[1]).toBe(3)
+    expect(model.botIdx[1]).toBe(1)
     // its top end is a terminal (merge) row → through-line enters from above
     expect(model.topIsTerminal[1]).toBe(true)
+    // main's tip is always a main-lane row, never the experiment's lane
+    expect(model.rows[model.tipRow[0]!]!.lane).toBe(0)
   })
 
   it('buildModel synthesizes missing event times and orders lanes by fork time', () => {
@@ -498,9 +504,11 @@ describe('lab-client browser bundle', () => {
     const kinds = model.rows.map((r) => r.kind)
     expect(kinds.filter((k) => k === 'fork')).toHaveLength(2)
     expect(kinds[kinds.length - 1]).toBe('init')
-    // no terminals here → lane tops are run tips, so no incoming through-line
+    // an open line has no terminal, so its lane top stays open
     expect(model.topIsTerminal[1]).toBe(false)
     expect(model.topIsTerminal[2]).toBe(false)
+    // main keeps its own tip even though the experiments are newer
+    expect(model.rows[model.tipRow[0]!]!.lane).toBe(0)
   })
 
   it('buildModel returns a safe empty model without data', () => {

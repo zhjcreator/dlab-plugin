@@ -615,6 +615,25 @@ source.mergeCommit = <sha>
 branch 保留
 ```
 
+### 12.0 晋级闸门（v0.1.4 起）
+
+「先 fork → 验证有效 → 才允许合入 main」从约定升级为**强约束**，在
+`SolutionService.merge` 中最先执行（早于任何 git 操作，因此被拒绝时目标 worktree
+完全未被触碰）：
+
+* 目标 `role === 'main'` 时：source 必须是 fork（有 `parentSolutionId`），且至少有一个
+  `succeeded` run。否则抛 `InvalidStateError`，消息里带来源行的实际状态
+  （has no runs / produced only N failed/canceled runs / is still running）与覆盖方式。
+* 实验 → 实验的合并（§12.1）**不设闸门**：把两条未完成的线合起来继续探索是合法操作。
+* `allowUnevidenced: true`（tool 参数 / RPC 字段 / CLI `--allow-unevidenced`）是显式的、
+  刻意的覆盖。
+* `SolutionService.mergeEvidence(solutionId)` 返回
+  `{ runs, succeeded, failed, live, forked }`，闸门与面板的 Promotion 区块都读它；
+  `graph.get` 的每个 node 也带 `evidence`。
+
+理由：main 承载的是「已验证的最佳状态」。允许无证据的行合入 main 会让主线退化成另一个
+实验目录，也使 run→metric→晋级 的闭环失去意义。
+
 ---
 
 ## 12.1 Merge Fork → Fork（合并两个实验方案）

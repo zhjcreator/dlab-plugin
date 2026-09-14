@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/host",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "DSH Host composition bundle for the Deep Learning Lab — provides ctx.lab, /dlab RPC channel, lab_* model tools, DSH_LAB_* shell env, system-prompt section",
   "type": "module",

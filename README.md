@@ -60,14 +60,44 @@ lost. Registry records are process-local; runs adopted after a host restart
 finish through the store's cross-process finalize. See
 `packages/lab-host/src/run-jobs.ts`.
 
+## Experiment first, promote only what worked
+
+A merge **into `main`** is gated (v0.1.4+): the source must be a fork of some
+solution **and** have produced at least one succeeded run. The refusal happens
+before any git operation, so nothing is touched:
+
+```
+refusing to merge "exp-a" into "main": the line produced only 2 failed/canceled runs.
+Run it first and promote only what succeeded, or pass allowUnevidenced to override deliberately.
+```
+
+* experiment → experiment merges stay ungated (combining two half-finished
+  lines is legitimate exploration);
+* `allowUnevidenced: true` on `lab_merge_solution`, or `--allow-unevidenced`
+  on `dsh-lab solution merge`, is the explicit override;
+* `solutions.mergeEvidence(slug)` / `solutions.evidence` (RPC) return the raw
+  counts (`runs` / `succeeded` / `failed` / `live` / `forked`) the gate and the
+  panel's **Promotion** block read.
+
 ## Panel (read-only observation)
 
-The DLab page tab in the native right sidebar shows the research evolution
-graph, a Runs list and an Activity feed. Run/solution details carry an explicit
-**← Back** button, run titles fall back to a readable argv rendering
-(`.venv/bin/python train.py --config /lab/configs/a.yaml` →
-`python train.py --config ./configs/a.yaml`), and each run's detail shows the
-live **output tail** (stdout + stderr) via `runs.log`.
+The DLab page tab in the native right sidebar has three parts:
+
+* **Evolution list** — *lifecycle only*: `init`, `fork`, `merge`, `archive`
+  rows on a git-style lane graph. Runs are **not** history rows; they live in
+  the Runs tab, so the list answers "what did the research do" instead of
+  repeating the run list.
+* **Runs tab** — grouped per solution (lane order first, so the active
+  experiment is not buried under main's history), newest first, with a
+  `n/N` variant ordinal inside graded groups; each run's detail shows the live
+  **output tail** (stdout + stderr) via `runs.log`.
+* **Details** — always reachable back: a breadcrumb bar (`← Back · PRD ▸
+  solution ▸ run`) sits under the header, and the detail header repeats
+  `← Back` plus `solution →`. Titles fall back to a readable argv rendering
+  (`.venv/bin/python train.py --config /lab/configs/a.yaml` →
+  `python train.py --config ./configs/a.yaml`), and solution details carry a
+  **Promotion** block mirroring the merge gate (fork / experiment / evidence /
+  merge-to-main).
 
 ## Phase 1 goal
 

@@ -15,6 +15,7 @@ import type {
   DiffView,
   ForkSolutionInput,
   GitStatus,
+  MergeEvidence,
   MergeMode,
   MergeResult,
   MergeSolutionInput,
@@ -37,6 +38,30 @@ export class SolutionService {
 
   private get workspace(): WorkspacePort {
     return this.deps.workspace
+  }
+
+  /**
+   * Run evidence for one solution: the raw material of the promotion gate
+   * (and of the panel's Promotion block). Reads the store only — no git.
+   */
+  async mergeEvidence(solutionId: string): Promise<MergeEvidence> {
+    const solution = await this.requireSolution(solutionId)
+    const runs = await this.store.listRuns({ solutionId: solution.id })
+    let succeeded = 0
+    let failed = 0
+    let live = 0
+    for (const run of runs) {
+      if (run.status === 'succeeded') succeeded++
+      else if (run.status === 'failed' || run.status === 'canceled' || run.status === 'lost') failed++
+      else if (run.status === 'running' || run.status === 'starting' || run.status === 'queued') live++
+    }
+    return {
+      runs: runs.length,
+      succeeded,
+      failed,
+      live,
+      forked: !!solution.parentSolutionId && solution.parentSolutionId !== solution.id,
+    }
   }
 
   /** Absolute path of a solution worktree dir given its slug. */
@@ -335,6 +360,34 @@ export class SolutionService {
       throw new InvalidStateError('cannot merge a broken solution; repair first')
     }
     const mode: MergeMode = input.mode ?? 'into-fork'
+
+    // Promotion gate: promoting INTO the mainline is a claim backed by
+    // evidence. An experiment line must be forked (its own branch off a
+    // parent) and must have produced at least one succeeded run before any of
+    // it lands on main. Experiment-to-experiment merges stay ungated, since
+    // combining two half-finished lines is legitimate exploration.
+    if (target.role === 'main' && input.allowUnevidenced !== true) {
+      if (source.role === 'main') {
+        throw new InvalidStateError('cannot merge the mainline into itself')
+      }
+      if (!source.parentSolutionId || source.parentSolutionId === source.id) {
+        throw new InvalidStateError(
+          `solution "${source.slug}" is not a fork of any solution; fork it before promoting work to the mainline`,
+        )
+      }
+      const evidence = await this.mergeEvidence(source.id)
+      if (evidence.succeeded === 0) {
+        const state = evidence.live > 0
+          ? 'is still running'
+          : evidence.failed > 0
+            ? `produced only ${evidence.failed} failed/canceled run${evidence.failed > 1 ? 's' : ''}`
+            : 'has no runs'
+        throw new InvalidStateError(
+          `refusing to merge "${source.slug}" into "${target.slug}": the line ${state}.` +
+            ' Run it first and promote only what succeeded, or pass allowUnevidenced to override deliberately.',
+        )
+      }
+    }
 
     // preflight first (refuses on conflicts before touching anything)
     const preflight = await this.git.mergePreflight(target.branch, source.branch)

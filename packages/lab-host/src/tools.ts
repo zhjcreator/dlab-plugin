@@ -269,7 +269,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_merge_solution',
       description:
-        'Merge a source solution into a target. Modes: into-fork (default; source stays active), into-target (source becomes merged, workspace archived), consolidate (squash into one commit). Merge-to-main is target="main" with into-target.',
+        'Merge a source solution into a target. Modes: into-fork (default; source stays active), into-target (source becomes merged, workspace archived), consolidate (squash into one commit). Merge-to-main is target="main" with into-target. Promotion gate: a merge INTO main is refused unless the source was forked from another solution and has at least one succeeded run — experiment first, promote only what worked (allowUnevidenced overrides deliberately).',
       parameters: {
         source: { type: 'string', required: true, description: 'Source solution id or slug' },
         target: { type: 'string', required: true, description: 'Target solution id or slug (e.g. "main")' },
@@ -282,6 +282,11 @@ export function apply(ctx: Context): void {
           type: 'boolean',
           description: 'Archive the source workspace after into-target/consolidate (default true)',
         },
+        allowUnevidenced: {
+          type: 'boolean',
+          description:
+            'Override the promotion gate: by default a merge INTO main requires the source to be a fork with at least one succeeded run. Set true only to deliberately promote an unevidenced line.',
+        },
       },
       output: { schema: { type: 'json' }, render: jsonRender },
       async execute(args, exec) {
@@ -293,6 +298,7 @@ export function apply(ctx: Context): void {
             mode,
             message: args.message,
             archiveSource: args.archiveSource,
+            allowUnevidenced: args.allowUnevidenced,
           }),
         )
       },
