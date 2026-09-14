@@ -212,6 +212,27 @@ describe('GPU wait-queue (DESIGN §19)', () => {
     25000,
   )
 
+  it('a command that selects its own card is rejected loudly with guidance', async () => {
+    // inline env prefix inside a shell command
+    await expect(
+      runs.start({ solutionId: 'exp', command: ['bash', '-c', 'CUDA_VISIBLE_DEVICES=0 python train.py'] }),
+    ).rejects.toThrow(/dlab owns card selection/)
+    // the env(1) form
+    await expect(
+      runs.start({ solutionId: 'exp', command: ['env', 'CUDA_VISIBLE_DEVICES=0,1', 'python', 'train.py'] }),
+    ).rejects.toThrow(/card-agnostic/)
+    // via the resources env
+    await expect(
+      runs.start({
+        solutionId: 'exp',
+        command: ['true'],
+        resources: { mode: 'auto', gpuCount: 1, env: { CUDA_VISIBLE_DEVICES: '0' } },
+      }),
+    ).rejects.toThrow(/silently break reservations/)
+    // nothing was created by the rejections
+    expect((await runs.list()).every((r) => !r.title?.includes('train.py'))).toBe(true)
+  })
+
   it('a GPU-less machine: unrequested runs proceed on CPU, requests fail loudly', async () => {
     const cpuDeps = {
       ...makeDeps(mkdtempSync(join(SANDBOX, 'cpu-')), 'CpuTest'),

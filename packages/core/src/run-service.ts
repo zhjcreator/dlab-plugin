@@ -135,6 +135,7 @@ export class RunService {
    */
   async start(input: StartRunInput): Promise<ExperimentRun> {
     if (input.command.length === 0) throw new InvalidStateError('run command must not be empty')
+    this.rejectSelfSelectedGpus(input)
 
     const solution = await this.deps.store
       .getSolution(input.solutionId)
@@ -218,6 +219,27 @@ export class RunService {
       return this.onAllocationRefused(run, input.resources, error)
     }
     return this.launch(run, gpuIds)
+  }
+
+  /**
+   * Card selection belongs to dlab (DESIGN §19.1): a command that sets
+   * CUDA_VISIBLE_DEVICES itself would override the injected allocation and
+   * silently break reservations — the run would use one card while another
+   * is reserved. Such submissions are rejected loudly with guidance; pinned
+   * cards are requested through gpuIds instead.
+   */
+  private rejectSelfSelectedGpus(input: StartRunInput): void {
+    const inline = input.command.find((arg) => /CUDA_VISIBLE_DEVICES\s*=/.test(arg))
+    const viaEnv = input.resources?.env?.CUDA_VISIBLE_DEVICES
+    if (inline === undefined && viaEnv === undefined) return
+    throw new InvalidStateError(
+      'the command selects GPUs itself — dlab owns card selection: keep the command card-agnostic ' +
+        '(no CUDA_VISIBLE_DEVICES in the command, the env, or the script; a script hardcoding ' +
+        'export CUDA_VISIBLE_DEVICES has the same effect) and pass gpuCount (any N free cards) or ' +
+        'gpuIds (pin exact cards) instead. dlab injects CUDA_VISIBLE_DEVICES for the allocated ' +
+        'cards; a self-selected card would silently break reservations' +
+        (inline !== undefined ? ` (offending argument: ${inline.slice(0, 80)})` : ''),
+    )
   }
 
   /**

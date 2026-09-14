@@ -397,15 +397,25 @@ export async function runCli(argv: string[]): Promise<void> {
   run
     .command('start <solution>')
     .description('start a run: snapshot the solution tree and execute a command in a detached worktree')
-    .requiredOption('-c, --command <argv...>', 'argv to execute (e.g. -c python train.py --config x.yaml)')
+    .requiredOption('-c, --command <argv...>', 'argv to execute (e.g. -c python train.py --config x.yaml); card-agnostic — dlab injects CUDA_VISIBLE_DEVICES')
     .option('-t, --title <title>', 'run title')
-    .option('--gpu-count <n>', 'auto-allocate N GPUs', Number)
+    .option('--gpu-count <n>', 'take any N free GPUs (queues when fewer are free)', Number)
+    .option('--gpus <ids>', 'pin exactly these GPU ids, comma-separated (e.g. 0,1); queues while busy', (v: string) =>
+      v.split(',').map((s) => Number(s.trim())),
+    )
     .option('--min-free-vram <mb>', 'minimum free VRAM per GPU (MB)', Number)
     .option('--wait', 'wait for the run to finish and print its final status')
     .action(
       async (
         solution: string,
-        opts: { command: string[]; title?: string; gpuCount?: number; minFreeVram?: number; wait?: boolean },
+        opts: {
+          command: string[]
+          title?: string
+          gpuCount?: number
+          gpus?: number[]
+          minFreeVram?: number
+          wait?: boolean
+        },
       ) => {
         const root = rootOf()
         const { deps } = makeSolutionService(root, 'lab')
@@ -416,15 +426,20 @@ export async function runCli(argv: string[]): Promise<void> {
           command: opts.command,
           title: opts.title,
           resources:
-            opts.gpuCount !== undefined || opts.minFreeVram !== undefined
+            opts.gpuCount !== undefined || opts.minFreeVram !== undefined || opts.gpus !== undefined
               ? {
-                  mode: 'auto',
+                  mode: opts.gpus !== undefined ? 'explicit' : 'auto',
+                  ...(opts.gpus !== undefined ? { gpuIds: opts.gpus } : {}),
                   ...(opts.gpuCount !== undefined ? { gpuCount: opts.gpuCount } : {}),
                   ...(opts.minFreeVram !== undefined ? { minFreeVramMB: opts.minFreeVram } : {}),
                 }
               : undefined,
         })
-        console.log(`started ${started.id}: snapshot=${started.snapshotCommit.slice(0, 8)} pid=${started.pid}`)
+        if (started.status === 'queued') {
+          console.log(`queued ${started.id}: waiting for GPUs (snapshot=${started.snapshotCommit.slice(0, 8)})`)
+        } else {
+          console.log(`started ${started.id}: snapshot=${started.snapshotCommit.slice(0, 8)} pid=${started.pid}`)
+        }
         console.log(`  run dir:    ${started.runDir}`)
         console.log(`  snapshot:   refs/dsh/runs/${started.id}`)
         if (opts.wait) {

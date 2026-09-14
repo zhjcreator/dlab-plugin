@@ -478,14 +478,15 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_start_run',
       description:
-        'Start an experiment run on a solution. Snapshots the current working tree immutably AT SUBMISSION (uncommitted changes included, branch untouched; the snapshot ref is retained forever) and launches the command in a detached run worktree with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits never affect the run — including while it waits in queue. GPU allocation is exclusive per card and reservation-backed: concurrent submissions spread across free cards, and each run holds its cards until it finishes. When every card is busy the run QUEUES (status queued, FIFO by submission, first-fit) and starts automatically as soon as cards free — submit the whole batch at once and wait for the single wake; lab_get_resources shows the queue in order. Impossible requests (unknown gpuIds, more cards than the machine has) fail immediately; runs on a GPU-less machine proceed without CUDA_VISIBLE_DEVICES. CPU-side utilities that need no GPU belong in background bash, not lab runs. Each run registers a streamable background job (kind lab-run; the result carries dshJobId): job_output streams its stdout, job_kill or lab_stop_run stops it. Your session is woken exactly ONCE per batch — after ALL its lab runs (queued ones included) have settled — through an umbrella job (kind lab-batch; the result carries batchJobId) whose notice summarizes every run: do not busy-poll lab_list_runs, and job_output on the batchJobId streams all live runs interleaved (each line prefixed with its run id). Disposing the owning session stops its runs.',
+        'Start an experiment run on a solution. Snapshots the current working tree immutably AT SUBMISSION (uncommitted changes included, branch untouched; the snapshot ref is retained forever) and launches the command in a detached run worktree with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits never affect the run — including while it waits in queue. GPU selection belongs to dlab: the command must be card-agnostic — NEVER set CUDA_VISIBLE_DEVICES in the command or the script (such submissions are rejected; a self-selected card would silently break reservations, and a script hardcoding export CUDA_VISIBLE_DEVICES has the same effect). Pass gpuCount for any N free cards, or gpuIds to pin exact cards; dlab injects CUDA_VISIBLE_DEVICES for the allocated cards (inside the process the pinned cards renumber to 0..N-1, so multi-worker launchers like torchrun compose with gpuCount). Allocation is exclusive per card and reservation-backed: concurrent submissions spread across free cards, each run holds its cards until it finishes, and when every card (or a pinned card) is busy the run QUEUES (status queued, FIFO by submission, first-fit) and starts automatically as cards free — submit the whole batch at once and wait for the single wake; lab_get_resources shows the queue in order. Impossible requests (unknown gpuIds, more cards than the machine has) fail immediately; runs on a GPU-less machine proceed without CUDA_VISIBLE_DEVICES. CPU-side utilities that need no GPU belong in background bash, not lab runs. Each run registers a streamable background job (kind lab-run; the result carries dshJobId): job_output streams its stdout, job_kill or lab_stop_run stops it. Your session is woken exactly ONCE per batch — after ALL its lab runs (queued ones included) have settled — through an umbrella job (kind lab-batch; the result carries batchJobId) whose notice summarizes every run: do not busy-poll lab_list_runs, and job_output on the batchJobId streams all live runs interleaved (each line prefixed with its run id). Disposing the owning session stops its runs.',
       parameters: {
         solution: { type: 'string', required: true, description: 'Solution id or slug' },
         command: {
           type: 'array',
           required: true,
           items: { type: 'string' },
-          description: 'argv to execute in the run worktree, e.g. ["python","train.py","--config","configs/x.yaml"]',
+          description:
+            'argv to execute in the run worktree, e.g. ["python","train.py","--config","configs/x.yaml"] — must be card-agnostic (no CUDA_VISIBLE_DEVICES; dlab injects the allocated cards)',
         },
         title: { type: 'string', description: 'Human-readable run title' },
         tags: {
@@ -496,7 +497,13 @@ export function apply(ctx: Context): void {
         },
         gpuCount: {
           type: 'number',
-          description: 'Auto-allocate this many GPUs (exclusive per card; the call fails when none free)',
+          description: 'Take any N free GPUs (exclusive per card; queues when fewer are free)',
+        },
+        gpuIds: {
+          type: 'array',
+          items: { type: 'number' },
+          description:
+            'Pin exactly these GPU ids (e.g. [3] or [0,1]); the run queues while any of them is busy. Prefer gpuCount unless a specific card is required.',
         },
         minFreeVramMB: { type: 'number', description: 'Minimum free VRAM per GPU (MB)' },
       },
@@ -514,9 +521,10 @@ export function apply(ctx: Context): void {
           title: args.title,
           tags: args.tags,
           resources:
-            args.gpuCount !== undefined || args.minFreeVramMB !== undefined
+            args.gpuCount !== undefined || args.minFreeVramMB !== undefined || args.gpuIds !== undefined
               ? {
-                  mode: 'auto',
+                  mode: args.gpuIds !== undefined ? 'explicit' : 'auto',
+                  ...(args.gpuIds !== undefined ? { gpuIds: args.gpuIds } : {}),
                   ...(args.gpuCount !== undefined ? { gpuCount: args.gpuCount } : {}),
                   ...(args.minFreeVramMB !== undefined ? { minFreeVramMB: args.minFreeVramMB } : {}),
                 }

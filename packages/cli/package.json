@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "dsh-lab command line — full lifecycle validation without DSH",
   "type": "module",
