@@ -37,13 +37,16 @@ export class LocalGitPort implements GitPort {
   /** Run git inside the bare repo with an optional work-tree override. */
   private async run(
     args: string[],
-    opts: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv } = {},
+    opts: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv; gitDir?: string; workTree?: string } = {},
   ): Promise<RunResult> {
-    const full = [
-      ...(opts.cwd ? [] : ['--git-dir', this.gitDir]),
-      ...(opts.cwd ? ['-C', opts.cwd] : []),
-      ...args,
-    ]
+    const full = opts.cwd
+      ? ['-C', opts.cwd, ...args]
+      : [
+          '--git-dir',
+          opts.gitDir ?? this.gitDir,
+          ...(opts.workTree ? ['--work-tree', opts.workTree] : []),
+          ...args,
+        ]
     try {
       const { stdout, stderr } = await execFileAsync('git', full, {
         maxBuffer: 64 * 1024 * 1024,
@@ -261,6 +264,74 @@ export class LocalGitPort implements GitPort {
     }
   }
 
+  /**
+   * Snapshot one path of a non-worktree directory (the project root's shared
+   * docs) onto a ref. Ignore rules apply, so the generated `.dlab` area stays
+   * out. The chain is kept by passing `parentRef` from the previous snapshot.
+   */
+  async commitPathSnapshot(input: {
+    workTree: string
+    path: string
+    refName: string
+    message: string
+    parentRef?: string
+    exclude?: string
+  }): Promise<string> {
+    const tmpIndex = join(tmpdir(), `dlab-pathsnap-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    const env = { ...process.env, GIT_INDEX_FILE: tmpIndex }
+    // The path lives in the project ROOT, which is not a worktree: address the
+    // lab's bare repository explicitly (never `-C <dir>`, which would resolve
+    // whatever repository that directory happens to carry).
+    const bare = { env, gitDir: this.gitDir, workTree: input.workTree }
+    try {
+      // fresh, empty index — this snapshot describes only `path`
+      await this.run(['read-tree', '--empty'], bare)
+      // the generated area is derived data: exclude it explicitly, so a
+      // stray un-ignore rule inside it cannot leak state into the history
+      const pathspec = input.exclude
+        ? ['-A', '--', input.path, `:(exclude)${input.path}/${input.exclude}`]
+        : ['-A', '--', input.path]
+      await this.run(['add', ...pathspec], bare)
+      const tree = (await this.run(['write-tree'], bare)).stdout.trim()
+      const args = ['commit-tree', tree, '-m', input.message]
+      if (input.parentRef) {
+        const parent = await this.run(['rev-parse', '--verify', '--quiet', input.parentRef], bare).catch(() => ({
+          stdout: '',
+          stderr: '',
+        }))
+        if (parent.stdout.trim()) args.push('-p', parent.stdout.trim())
+      }
+      const sha = (await this.run(args, bare)).stdout.trim()
+      await this.run(['update-ref', input.refName, sha], { env })
+      return sha
+    } finally {
+      try {
+        rmSync(tmpIndex, { force: true })
+      } catch {
+        /* best-effort temp cleanup */
+      }
+    }
+  }
+
+  async logRef(refName: string, limit: number): Promise<{ commit: string; message: string; at: number }[]> {
+    const exists = await this.run(['rev-parse', '--verify', '--quiet', refName]).catch(() => null)
+    if (!exists || !exists.stdout.trim()) return []
+    // unit separator keeps subjects containing tabs/newlines intact
+    const { stdout } = await this.run([
+      'log',
+      `--max-count=${limit}`,
+      '--pretty=format:%H%x1f%s%x1f%ct',
+      refName,
+    ])
+    return stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [commit, message, at] = line.split('\x1f')
+        return { commit: commit ?? '', message: message ?? '', at: Number(at ?? 0) * 1000 }
+      })
+  }
+
   async updateRef(refName: string, commit: string): Promise<void> {
     await this.run(['update-ref', refName, commit])
   }
@@ -302,11 +373,27 @@ export class LocalGitPort implements GitPort {
 
   async mergeInWorktree(path: string, targetBranch: string, sourceBranch: string): Promise<string> {
     const dir = resolve(this.worktreeRoot, path)
-    await this.run(['merge', '--no-ff', sourceBranch, '-m', `[dsh-lab] merge ${sourceBranch} into ${targetBranch}`], {
-      cwd: dir,
-    })
+    // -X ours: shared documents live on the integration line (main's
+    // docs/shared). An experiment that edited a shared file — typically one
+    // that was forked before a later doc update — must not be able to revert
+    // the mainline's version during promotion. Code conflicts still stop the
+    // merge with a conflict, exactly as before.
+    await this.run(
+      ['merge', '--no-ff', '-X', 'ours', sourceBranch, '-m', `[dsh-lab] merge ${sourceBranch} into ${targetBranch}`],
+      { cwd: dir },
+    )
     const { stdout } = await this.run(['rev-parse', 'HEAD'], { cwd: dir })
     return stdout.trim()
+  }
+
+  /**
+   * Paths changed between two branches (three-dot, i.e. relative to their
+   * merge base). Used by the docs partitioning to explain what a promotion
+   * brings in, including shared documents that will keep the target's version.
+   */
+  async changedPathsBetween(branchA: string, branchB: string): Promise<string[]> {
+    const { stdout } = await this.run(['diff', '--name-only', `${branchA}...${branchB}`])
+    return stdout.split('\n').map((l) => l.trim()).filter(Boolean)
   }
 
   async squashMergeInWorktree(

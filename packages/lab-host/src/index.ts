@@ -17,12 +17,13 @@
  *      shell variables are omitted.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { LabCore } from './lab-core.js'
 import { DshWorkspacePort } from './workspace-port.js'
+import { DocsService } from '@dsh-lab/core'
 import { tailFile } from '@dsh-lab/runner'
 import type {
   DiffView,
@@ -131,6 +132,12 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
   return {
     root: core.root,
     projectName: core.projectName,
+    /** Shared-document locations, so shell env / prompt need no docs logic. */
+    docsPaths: {
+      sharedDir: core.docs.sharedDir,
+      link: core.config.docLinkPath,
+      relDir: core.config.docsDir,
+    },
 
     /** The persisted project row (authoritative name for detected labs). */
     project: async (): Promise<import('@dsh-lab/shared').Project | undefined> =>
@@ -273,6 +280,59 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
       },
     },
 
+    // ── shared documents (DESIGN §26) ──────────────────────────────────────
+
+    docs: {
+      layout: async (): Promise<unknown> => {
+        const layout = core.docs.layout()
+        return {
+          ...layout,
+          link: core.config.docLinkPath,
+          linkTarget: DocsService.linkTarget(core.config.docsDir, core.config.docLinkPath.split('/').length - 1),
+          sharedRelative: core.config.docsDir,
+          solutions: (await core.solutions.list()).map((sol) => ({
+            slug: sol.slug,
+            role: sol.role,
+            status: sol.status,
+            link: `${core.config.solutionsDir}/${sol.slug}/${core.config.docLinkPath}`,
+          })),
+        }
+      },
+      list: async (): Promise<unknown> => ({ docs: core.docs.list(), state: core.docs.state() }),
+      read: async (relPath: string): Promise<unknown> => {
+        if (typeof relPath !== 'string' || relPath === '') throw new Error('docs.read requires a path')
+        return core.docs.read(relPath)
+      },
+      write: async (input: { path: string; text: string }): Promise<unknown> => {
+        if (typeof input.path !== 'string' || input.path === '') throw new Error('docs.write requires a path')
+        if (typeof input.text !== 'string') throw new Error('docs.write requires text')
+        const written = core.docs.write(input.path, input.text)
+        const version = await core.docs.commitVersion(`[dsh-lab] docs: update ${written}`)
+        hooks.onMutation()
+        return { path: written, bytes: Buffer.byteLength(input.text, 'utf8'), version }
+      },
+      promote: async (input: {
+        solutionId: string
+        includeLocal?: boolean
+        promote?: string[]
+        conclusion?: string
+      }): Promise<unknown> => {
+        const result = await core.docs.promoteSolution({
+          solutionId: input.solutionId,
+          includeLocal: input.includeLocal,
+          promote: input.promote,
+          conclusion: input.conclusion,
+        })
+        hooks.onMutation()
+        return result
+      },
+      repair: async (): Promise<unknown> => ({ repaired: await core.docs.repairLinks() }),
+      history: async (limit?: number): Promise<unknown> => ({
+        versionRef: core.docs.versionRef,
+        commits: await core.docs.history(typeof limit === 'number' ? limit : 20),
+      }),
+    },
+
     // ── resources / environment ────────────────────────────────────────────
 
     resources: {
@@ -323,6 +383,24 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
           })
         })
 
+        // per-solution local note inventory (cheap: one readdir per solution)
+        const localDocsOf = (slug: string): { path: string; size: number; mtime: number }[] => {
+          const out: { path: string; size: number; mtime: number }[] = []
+          for (const dir of ['docs', 'notes', 'local']) {
+            const abs = resolve(core.root, core.config.solutionsDir, slug, dir)
+            try {
+              for (const entry of readdirSync(abs, { withFileTypes: true })) {
+                if (entry.isDirectory()) continue
+                const stat = statSync(resolve(abs, entry.name))
+                out.push({ path: `${dir}/${entry.name}`, size: stat.size, mtime: Math.round(stat.mtimeMs) })
+              }
+            } catch {
+              /* no such local dir */
+            }
+          }
+          return out
+        }
+
         // nodes
         const nodes: Record<string, unknown>[] = []
         for (const v of views) {
@@ -346,6 +424,10 @@ export function buildSurface(core: LabCore, hooks: { onMutation: () => void }) {
             dirty: v.dirty,
             lastRunAt: v.lastRunAt,
             evidence,
+            // docs partitioning (DESIGN §26): shared knowledge lives at the
+            // project root; the solution contributes only its local notes
+            localDocs: localDocsOf(v.slug),
+            sharedDocs: core.docs.list().length,
           })
         }
 
@@ -526,6 +608,7 @@ export class LabService extends Service {
       const lines: string[] = ['DSH LAB CONTEXT', '']
       lines.push(`Project: ${await this.projectNameOf(core)}`)
       lines.push(`Root: ${core.root}`)
+      lines.push(`Shared docs: ${core.docs.sharedDir} (link in every solution: ${core.config.docLinkPath})`)
       const solutions = await core.solutions.list().catch(() => [])
       if (solutions.length > 0) {
         lines.push('', 'Solutions:')
@@ -541,6 +624,8 @@ export class LabService extends Service {
           '',
           'Rules:',
           '- Do not modify another Solution workspace directly; use lab tools for fork/archive/merge.',
+          `- Documents: shared knowledge (charter, roadmap, baseline references, lessons) lives ONLY in the project-root ${core.config.docsDir}/ directory, which every solution reaches through ${core.config.docLinkPath} — one physical copy, no per-experiment forks of it. Keep per-experiment notes inside the solution and promote conclusions with lab_promote_docs (archiving promotes automatically).`,
+          '- Experiment first, promote only what worked: a merge into main is refused unless the line was forked and has at least one succeeded run (allowUnevidenced overrides deliberately).',
           '- Experiment outputs should use DSH_LAB_RUN_DIR (Phase 3).',
           '- Parameter sweeps: start each variant with `lab_run_start` on the SAME solution, sharing one `sweep/<name>` tag plus a per-run `<param>=<value>` tag. Do NOT checkpoint config tweaks per run — each run snapshot already captures its config; checkpoint only the winning config. Fork a new Solution only when the hypothesis itself changes.',
         )

@@ -17,6 +17,7 @@ import {
   SolutionService,
   RunService,
   ReconcileService,
+  DocsService,
   type LabConfig,
   type LabDeps,
   type WorkspacePort,
@@ -41,6 +42,7 @@ export class LabCore {
   readonly deps: LabDeps
   readonly solutions: SolutionService
   readonly runs: RunService
+  readonly docs: DocsService
   readonly reconcile: ReconcileService
   private readonly store: SqliteStore
 
@@ -58,6 +60,10 @@ export class LabCore {
       runRefPrefix: 'refs/dsh/runs/',
       experimentBranchPrefix: 'exp/',
       mainBranch: 'main',
+      docsDir: 'docs',
+      trackDir: '.dlab',
+      docLinkPath: 'local/docs',
+      docsVersionRef: 'refs/dsh/docs',
     }
     mkdirSync(resolve(projectRoot, this.config.labStateDir), { recursive: true })
     const git = new LocalGitPort({
@@ -73,7 +79,8 @@ export class LabCore {
       scheduler: new GpuScheduler(),
       workspace: opts.workspace,
     }
-    this.solutions = new SolutionService(this.deps)
+    this.docs = new DocsService(this.deps)
+    this.solutions = new SolutionService(this.deps, this.docs)
     this.runs = new RunService(this.deps)
     this.reconcile = new ReconcileService(this.deps)
   }

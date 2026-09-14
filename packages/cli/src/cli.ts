@@ -5,14 +5,14 @@
  * no DSH runtime involved.
  */
 
-import { mkdirSync, existsSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readlinkSync } from 'node:fs'
 import { resolve, isAbsolute } from 'node:path'
 import { Command } from 'commander'
 import { LocalGitPort } from '@dsh-lab/git'
 import { SqliteStore } from '@dsh-lab/store'
 import { LocalRunner } from '@dsh-lab/runner'
 import { GpuScheduler } from '@dsh-lab/scheduler'
-import { SolutionService } from '@dsh-lab/core'
+import { SolutionService, DocsService } from '@dsh-lab/core'
 import type { LabConfig, LabDeps } from '@dsh-lab/core'
 
 export function makeConfig(root: string, projectName: string): LabConfig {
@@ -29,6 +29,19 @@ export function makeConfig(root: string, projectName: string): LabConfig {
     runRefPrefix: 'refs/dsh/runs/',
     experimentBranchPrefix: 'exp/',
     mainBranch: 'main',
+    docsDir: 'docs',
+    trackDir: '.dlab',
+    docLinkPath: 'local/docs',
+    docsVersionRef: 'refs/dsh/docs',
+  }
+}
+
+/** Read a worktree's local/docs link target, or null when absent/not a link. */
+function readFileLink(path: string): string | null {
+  try {
+    return lstatSync(path).isSymbolicLink() ? readlinkSync(path) : '(real directory)'
+  } catch {
+    return null
   }
 }
 
@@ -57,9 +70,13 @@ export function makeDeps(root: string, projectName: string): LabDeps {
   return { config, git, store, runner, scheduler, workspace }
 }
 
-export function makeSolutionService(root: string, projectName: string): { service: SolutionService; deps: LabDeps } {
+export function makeSolutionService(
+  root: string,
+  projectName: string,
+): { service: SolutionService; docs: DocsService; deps: LabDeps } {
   const deps = makeDeps(root, projectName)
-  return { service: new SolutionService(deps), deps }
+  const docs = new DocsService(deps)
+  return { service: new SolutionService(deps, docs), docs, deps }
 }
 
 export async function runCli(argv: string[]): Promise<void> {
@@ -229,6 +246,107 @@ export async function runCli(argv: string[]): Promise<void> {
         console.log(
           `merged ${source} → ${opts.target} (${result.mode}): commit ${result.mergeCommit.slice(0, 8)}, source now ${result.sourceStatusAfter}`,
         )
+        ;(deps.store as SqliteStore).close()
+      },
+    )
+
+
+  // ── shared documents (DESIGN §26) ─────────────────────────────────────────
+
+  const docs = program.command('docs').description('project-wide shared documents (single source of truth)')
+
+  docs
+    .command('layout')
+    .description('show the shared docs directory, the generated area and the per-solution link')
+    .action(async () => {
+      const root = rootOf()
+      const { service, docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      const layout = docSvc.layout()
+      console.log(`shared docs : ${layout.sharedDir}`)
+      console.log(`generated   : ${layout.trackDir}`)
+      console.log(`link        : ${docSvc.linkPathFor({ slug: '<slug>' })}`)
+      console.log('')
+      for (const s of await service.list()) {
+        const link = docSvc.linkPathFor(s)
+        const kind = readFileLink(link)
+        console.log(`  ${s.slug.padEnd(20)} ${s.status.padEnd(8)} ${kind ?? '(no link)'}`)
+      }
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('list')
+    .description('list shared documents with size and mtime')
+    .action(async () => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      const entries = docSvc.list()
+      if (entries.length === 0) console.log('(no shared documents yet)')
+      for (const e of entries) {
+        console.log(`${String(e.size).padStart(8)}  ${new Date(e.mtime).toISOString().slice(0, 16)}  ${e.path}`)
+      }
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('read <path>')
+    .description('print one shared document')
+    .action(async (relPath: string) => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      process.stdout.write(docSvc.read(relPath).text)
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('history')
+    .description('shared-docs version history (refs/dsh/docs)')
+    .option('-n, --limit <n>', 'max commits', '20')
+    .action(async (opts: { limit: string }) => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      const commits = await docSvc.history(Number(opts.limit) || 20)
+      if (commits.length === 0) console.log('(no docs versions yet)')
+      for (const c of commits) {
+        console.log(`${c.commit.slice(0, 8)}  ${new Date(c.at).toISOString().slice(0, 16)}  ${c.message}`)
+      }
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('repair')
+    .description('re-create the local/docs link in every active solution worktree')
+    .action(async () => {
+      const root = rootOf()
+      const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+      const repaired = await docSvc.repairLinks()
+      console.log(repaired.length ? `repaired: ${repaired.join(', ')}` : 'all links healthy')
+      ;(deps.store as SqliteStore).close()
+    })
+
+  docs
+    .command('promote <solution>')
+    .description("copy a solution's local notes into the shared docs (+ snapshot)")
+    .option('--promote <path...>', 'paths to copy to the SAME path in the shared docs')
+    .option('--conclusion <text>', 'conclusion recorded as docs/local/<slug>/conclusion.md')
+    .option('--no-local', 'skip mirroring the local notes into docs/local/<slug>/')
+    .action(
+      async (
+        solution: string,
+        opts: { promote?: string[]; conclusion?: string; local: boolean },
+      ) => {
+        const root = rootOf()
+        const { docs: docSvc, deps } = makeSolutionService(root, 'lab')
+        const result = await docSvc.promoteSolution({
+          solutionId: solution,
+          includeLocal: opts.local,
+          promote: opts.promote,
+          conclusion: opts.conclusion,
+        })
+        console.log(`promoted ${solution}`)
+        for (const p of result.localCopies) console.log(`  local   ${p}`)
+        for (const p of result.sharedWrites) console.log(`  shared  ${p}`)
+        console.log(`  snapshot ${result.snapshot}`)
         ;(deps.store as SqliteStore).close()
       },
     )

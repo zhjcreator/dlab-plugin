@@ -50,6 +50,13 @@ export interface Project {
   name: string
   rootPath: string
   mainSolutionId?: string
+  /**
+   * Project-wide document directory (project-root relative) — the shared
+   * source of truth for charter / roadmap / baseline references / lessons.
+   * Every solution worktree carries a link to it, so there is exactly one
+   * copy and `main` becomes the canonical carrier (DESIGN §26).
+   */
+  docs?: string
   createdAt: number
   updatedAt: number
 }

@@ -170,11 +170,12 @@ describe('host wiring: LabService on real Cordis', () => {
     expect(workspaceCalls).toContainEqual(`create:${join(labRoot, 'solutions/main')}`)
   })
 
-  it('registers all 16 lab_* tools', () => {
+  it('registers all 19 lab_* tools', () => {
     const names = registeredTools.map((t) => t.name).sort()
     expect(names).toEqual([
       'lab_archive_solution',
       'lab_checkpoint_solution',
+      'lab_docs',
       'lab_fork_solution',
       'lab_get_resources',
       'lab_get_run',
@@ -182,6 +183,7 @@ describe('host wiring: LabService on real Cordis', () => {
       'lab_list_runs',
       'lab_list_solutions',
       'lab_merge_solution',
+      'lab_promote_docs',
       'lab_restore_solution',
       'lab_run_diff',
       'lab_solution_diff',
@@ -189,6 +191,7 @@ describe('host wiring: LabService on real Cordis', () => {
       'lab_status',
       'lab_stop_run',
       'lab_update_solution_metadata',
+      'lab_write_doc',
     ])
   })
 
@@ -273,13 +276,22 @@ describe('host wiring: LabService on real Cordis', () => {
     expect(res.error.code).toBe('unknown-endpoint')
   })
 
-  it('shellEnv contributor exposes DSH_LAB_ROOT / DSH_LAB_PROJECT', () => {
+  it('shellEnv contributor exposes DSH_LAB_ROOT / DSH_LAB_PROJECT / docs paths', () => {
     expect(envContributor).toBeDefined()
     expect(envContributor!.name).toBe('dsh-lab')
-    expect(Object.keys(envContributor!.variables).sort()).toEqual(['DSH_LAB_PROJECT', 'DSH_LAB_ROOT'])
+    expect(Object.keys(envContributor!.variables).sort()).toEqual([
+      'DSH_LAB_DOCS',
+      'DSH_LAB_DOCS_LINK',
+      'DSH_LAB_PROJECT',
+      'DSH_LAB_ROOT',
+    ])
     const resolved = envContributor!.resolve(fakeExec)
     expect(resolved.DSH_LAB_ROOT).toBe(labRoot)
     expect(resolved.DSH_LAB_PROJECT).toBe('HostTest')
+    // the shared docs directory is the project-root docs/ dir, reached from a
+    // solution through the identical link path
+    expect(resolved.DSH_LAB_DOCS).toBe(join(labRoot, 'docs'))
+    expect(resolved.DSH_LAB_DOCS_LINK).toBe('local/docs')
   })
 
   it('systemPrompt section renders the live lab context', async () => {

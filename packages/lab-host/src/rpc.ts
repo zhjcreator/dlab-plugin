@@ -44,6 +44,13 @@ type Endpoint =
   | 'environment.get'
   | 'graph.get'
   | 'events.list'
+  | 'docs.layout'
+  | 'docs.list'
+  | 'docs.read'
+  | 'docs.write'
+  | 'docs.promote'
+  | 'docs.repair'
+  | 'docs.history'
 
 /**
  * Single-switch dispatch over every /dlab endpoint. Never throws.
@@ -199,6 +206,34 @@ export async function dispatch(
 
       case 'events.list':
         return ok(await svc.events.list(typeof p.limit === 'number' ? p.limit : 20))
+
+      case 'docs.layout':
+        return ok(await svc.docs.layout())
+
+      case 'docs.list':
+        return ok(await svc.docs.list())
+
+      case 'docs.read':
+        return ok(await svc.docs.read(String(p.path)))
+
+      case 'docs.write':
+        return ok(await svc.docs.write({ path: String(p.path), text: String(p.text ?? '') }))
+
+      case 'docs.promote':
+        return ok(
+          await svc.docs.promote({
+            solutionId: String(p.solution),
+            includeLocal: typeof p.includeLocal === 'boolean' ? p.includeLocal : undefined,
+            promote: Array.isArray(p.promote) ? (p.promote as unknown[]).map(String) : undefined,
+            conclusion: typeof p.conclusion === 'string' ? p.conclusion : undefined,
+          }),
+        )
+
+      case 'docs.repair':
+        return ok(await svc.docs.repair())
+
+      case 'docs.history':
+        return ok(await svc.docs.history(typeof p.limit === 'number' ? p.limit : 20))
 
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)

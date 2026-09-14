@@ -23,10 +23,18 @@ import type {
   SolutionStatus,
 } from '@dsh-lab/shared'
 import { solutionId } from '@dsh-lab/shared'
+import type { DocsService, PromoteDocsResult } from './docs-service.js'
 import type { GitPort, LabDeps, StorePort, WorkspacePort } from './ports.js'
 
+/** Local (per-experiment) notes a promotion mirrors into the shared docs. */
+const LOCAL_NOTE_DIRS = ['docs', 'notes', 'local/docs', 'results']
+
 export class SolutionService {
-  constructor(private readonly deps: LabDeps) {}
+  constructor(
+    private readonly deps: LabDeps,
+    /** Optional: materializes the shared-docs link in every new worktree. */
+    private readonly docs?: DocsService,
+  ) {}
 
   private get store(): StorePort {
     return this.deps.store
@@ -131,7 +139,15 @@ export class SolutionService {
     }
 
     const project = await this.store.createProject({ name, rootPath: root })
-    return this.finishInit(project.id)
+    const main = await this.finishInit(project.id)
+    // the project-wide docs directory + its per-solution links (DESIGN §26)
+    if (this.docs) {
+      await this.docs.ensureLayout()
+      await this.store.setProjectDocs(project.id, this.deps.config.docsDir)
+      this.docs.materialize(main)
+      await this.docs.commitVersion(`[dsh-lab] docs: initialize shared documents for ${name}`)
+    }
+    return main
   }
 
   private async finishInit(projectId: string): Promise<Solution> {
@@ -208,6 +224,8 @@ export class SolutionService {
 
     await this.git.createBranch(branch, head)
     await this.git.addWorktree(this.solutionDir(input.slug), branch)
+    // every worktree reaches the project-wide docs through one link
+    this.docs?.materialize({ slug: input.slug })
     const now = Date.now()
     const solution: Solution = {
       id: solutionId(),
@@ -249,6 +267,9 @@ export class SolutionService {
     return { commit }
   }
 
+  /** Result of the docs promotion performed by the last archive (if any). */
+  lastPromotion: PromoteDocsResult | null = null
+
   /** Archive: dirty → auto-checkpoint, remove worktree, delete DSH workspace, mark archived. */
   async archive(idOrSlug: string, conclusion?: string): Promise<Solution> {
     const solution = await this.requireSolution(idOrSlug)
@@ -263,6 +284,21 @@ export class SolutionService {
     let head = solution.headCommit
     if (!status.clean) {
       head = await this.git.commitAll(dir, `[dsh-lab] archive: ${solution.name}`)
+    }
+
+    // archival removes the worktree, so anything learned that must outlive
+    // this line of work is promoted into the shared docs first (DESIGN §26)
+    this.lastPromotion = null
+    if (this.docs) {
+      try {
+        this.lastPromotion = await this.docs.promoteSolution({
+          solutionId: solution.id,
+          includeLocal: true,
+          ...(conclusion ? { conclusion } : {}),
+        })
+      } catch {
+        /* promotion is best-effort: never block an archive on doc copying */
+      }
     }
 
     await this.git.removeWorktree(this.solutionDir(solution.slug))
@@ -302,6 +338,7 @@ export class SolutionService {
       throw new InvalidStateError(`branch "${solution.branch}" no longer exists; cannot restore`)
     }
     await this.git.addWorktree(this.solutionDir(solution.slug), solution.branch)
+    this.docs?.materialize(solution)
     const head = await this.git.branchHead(solution.branch)
     const workspaceId = await this.workspace.createWorkspace(
       this.solutionDir(solution.slug),

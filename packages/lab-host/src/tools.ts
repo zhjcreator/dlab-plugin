@@ -330,6 +330,87 @@ export function apply(ctx: Context): void {
     }),
   )
 
+  // ── shared documents (DESIGN §26) ─────────────────────────────────────────
+
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_docs',
+      description:
+        'Read the project-wide shared documents (charter, roadmap, baseline references, lessons) and inspect the docs layout. Shared documents live ONLY at the project root docs/ directory — every solution worktree reaches them through the link local/docs, so there is exactly one copy, and the directory is versioned under refs/dsh/docs (it lives outside every worktree). Actions: "layout" (paths, per-solution link, where local notes belong), "list" (documents with size/mtime), "read" (requires path), "history" (version commits). Per-experiment notes stay inside the solution; promote them with lab_promote_docs.',
+      parameters: {
+        action: {
+          type: 'string',
+          description: 'layout | list | read | history (default: list)',
+        },
+        path: {
+          type: 'string',
+          description: 'Document path relative to the shared docs directory (required for action=read)',
+        },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args, exec) {
+        const surface = surfaceFor(lab, exec)
+        const action = args.action ?? 'list'
+        if (action === 'layout') return json(await surface.docs.layout())
+        if (action === 'list') return json(await surface.docs.list())
+        if (action === 'history') return json(await surface.docs.history())
+        if (action === 'read') {
+          if (!args.path) throw new Error('lab_docs action=read requires a path')
+          return json(await surface.docs.read(args.path))
+        }
+        throw new Error(`unknown lab_docs action "${action}" (layout | list | read | history)`)
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_write_doc',
+      description:
+        'Create or overwrite one project-wide shared document (path relative to the docs directory). Use it for knowledge that must outlive a single experiment: project goals, the current roadmap, baseline references, environment setup, and cross-cutting lessons with their evidence. Never put per-experiment scratch notes here — keep those inside the solution and promote them with lab_promote_docs.',
+      parameters: {
+        path: { type: 'string', required: true, description: 'Document path, e.g. "roadmap.md" or "baselines/r2m.md"' },
+        text: { type: 'string', required: true, description: 'Full document body' },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args, exec) {
+        return json(await surfaceFor(lab, exec).docs.write({ path: args.path, text: args.text }))
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'lab_promote_docs',
+      description:
+        "Promote a solution's results into the shared documents: mirrors its local notes (docs/, notes/, local/) into docs/local/<slug>/, optionally copies chosen files to shared paths, and writes an immutable snapshot under docs/.dlab/snapshots/ that survives archiving the solution. Use it when an experiment produced a conclusion worth keeping, or before archiving. Lab archive also promotes automatically.",
+      parameters: {
+        solution: { type: 'string', required: true, description: 'Solution id or slug' },
+        promote: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Paths relative to the solution that should be copied to the SAME path in the shared docs',
+        },
+        conclusion: { type: 'string', description: 'Short conclusion to record as docs/local/<slug>/conclusion.md' },
+        includeLocal: {
+          type: 'boolean',
+          description: 'Mirror the solution local notes into docs/local/<slug>/ (default true)',
+        },
+      },
+      output: { schema: { type: 'json' }, render: jsonRender },
+      async execute(args, exec) {
+        return json(
+          await surfaceFor(lab, exec).docs.promote({
+            solutionId: args.solution,
+            includeLocal: args.includeLocal,
+            promote: args.promote,
+            conclusion: args.conclusion,
+          }),
+        )
+      },
+    }),
+  )
+
   // ── run tools (Phase 3) ───────────────────────────────────────────────────
 
   ctx.tools.register(

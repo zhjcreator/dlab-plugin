@@ -1,5 +1,6 @@
 export * from './ports.js'
 export * from './solution-service.js'
 export * from './run-service.js'
+export * from './docs-service.js'
 export * from './reconcile.js'
 export * from './events.js'

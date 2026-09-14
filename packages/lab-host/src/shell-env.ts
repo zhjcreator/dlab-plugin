@@ -25,6 +25,14 @@ export function apply(ctx: Context): void {
       DSH_LAB_PROJECT: {
         description: "Display name of the lab project owning the session's workspace.",
       },
+      DSH_LAB_DOCS: {
+        description:
+          'Absolute path of the project-wide shared documents directory. Shared documents (charter, roadmap, baseline references, lessons) live ONLY here — never inside a solution worktree; the worktree link local/docs points at it.',
+      },
+      DSH_LAB_DOCS_LINK: {
+        description:
+          'Path of the shared-docs link inside the current solution worktree (local/docs); identical in every solution.',
+      },
     },
     resolve: (execution) => {
       const surface = ctx.lab.surface(agentSessionCwd((execution as { agent?: unknown }).agent))
@@ -32,6 +40,8 @@ export function apply(ctx: Context): void {
       return {
         DSH_LAB_ROOT: surface.root,
         DSH_LAB_PROJECT: surface.projectName,
+        DSH_LAB_DOCS: surface.docsPaths.sharedDir,
+        DSH_LAB_DOCS_LINK: surface.docsPaths.link,
       }
     },
   })

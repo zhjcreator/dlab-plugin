@@ -41,13 +41,33 @@ export interface GitPort {
   getStatus(path: string): Promise<GitStatus>
   commitAll(path: string, message: string): Promise<string> // adds tracked+untracked under path
   commitTreeSnapshot(path: string, refName: string, message: string): Promise<string>
+  /**
+   * Snapshot ONE project-root-relative path (e.g. the shared docs directory)
+   * onto `refName`, without a worktree of its own: the path lives in the
+   * project root, which is not a worktree, so plumbing + a temporary index is
+   * the only way to version it. `parentRef` chains the snapshots into a
+   * history. Returns the commit sha.
+   */
+  commitPathSnapshot(input: {
+    workTree: string
+    path: string
+    refName: string
+    message: string
+    parentRef?: string
+    /** Generated subtree to leave out (relative to `path`). */
+    exclude?: string
+  }): Promise<string>
+  /** Commits reachable from a ref, newest first (empty when the ref is absent). */
+  logRef(refName: string, limit: number): Promise<{ commit: string; message: string; at: number }[]>
   updateRef(refName: string, commit: string): Promise<void>
 
   mergeBase(a: string, b: string): Promise<string>
   /** Dry-run preflight: returns changed files and whether conflicts are expected. */
   mergePreflight(targetBranch: string, sourceBranch: string): Promise<{ conflictFiles: string[]; clean: boolean }>
-  /** Real merge executed in the target worktree path. */
+  /** Real merge executed in the target worktree path (shared docs keep the target's side). */
   mergeInWorktree(path: string, targetBranch: string, sourceBranch: string): Promise<string>
+  /** Paths changed between two branches relative to their merge base (three-dot). */
+  changedPathsBetween(branchA: string, branchB: string): Promise<string[]>
   squashMergeInWorktree(path: string, targetBranch: string, sourceBranch: string, message: string): Promise<string>
 
   diff(baseRef: string | undefined, a: string, b: string): Promise<{ changedFiles: { status: 'A' | 'M' | 'D'; path: string }[]; patch?: string }>
@@ -65,6 +85,8 @@ export interface StorePort {
   upsertSolution(solution: import('@dsh-lab/shared').Solution): Promise<void>
   /** Record which solution is the project's main (set once at init). */
   setMainSolution(projectId: string, solutionId: string): Promise<void>
+  /** Record the project-wide document directory (DESIGN §26). */
+  setProjectDocs(projectId: string, docs: string): Promise<void>
 
   listRuns(filter?: { solutionId?: string; status?: RunStatus }): Promise<import('@dsh-lab/shared').ExperimentRun[]>
   getRun(id: string): Promise<import('@dsh-lab/shared').ExperimentRun | undefined>
@@ -142,6 +164,23 @@ export interface LabConfig {
   runRefPrefix: string // 'refs/dsh/runs/'
   experimentBranchPrefix: string // 'exp/'
   mainBranch: string // 'main'
+  /**
+   * Project-wide document directory, project-root relative — the shared
+   * source of truth every solution worktree carries a link to (DESIGN §26).
+   * Shared documents (charter, roadmap, baseline references, cross-cutting
+   * lessons) live ONLY there; per-experiment notes stay in the solution.
+   */
+  docsDir: string // 'docs'
+  /** Generated, machine-written area *inside* {@link docsDir}: mirrors + snapshots. */
+  trackDir: string // '.dlab'
+  /**
+   * Relative path (inside a solution worktree) of the doc link. Its parent
+   * must itself be a real directory in every solution — the link is always
+   * `solutions/<slug>/local/docs`, so nothing can shadow it.
+   */
+  docLinkPath: string // 'local/docs'
+  /** Ref holding the shared-docs history (root docs/ is not in a worktree). */
+  docsVersionRef: string // 'refs/dsh/docs'
 }
 
 /** Shared facade carrying every port + config. */

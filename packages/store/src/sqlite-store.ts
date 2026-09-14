@@ -41,6 +41,7 @@ export class SqliteStore implements StorePort {
       name: row.name as string,
       rootPath: row.root_path as string,
       mainSolutionId: (row.main_solution_id as string | null) ?? undefined,
+      docs: (row.docs as string | null) ?? undefined,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,
     })
@@ -171,6 +172,12 @@ export class SqliteStore implements StorePort {
     this.db
       .prepare('UPDATE projects SET main_solution_id = ?, updated_at = ? WHERE id = ?')
       .run(solutionId, Date.now(), projectId)
+    return Promise.resolve()
+  }
+
+  /** Record the project-wide document directory (see DESIGN §26). */
+  setProjectDocs(projectId: string, docs: string): Promise<void> {
+    this.db.prepare('UPDATE projects SET docs = ?, updated_at = ? WHERE id = ?').run(docs, Date.now(), projectId)
     return Promise.resolve()
   }
 
