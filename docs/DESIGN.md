@@ -901,6 +901,47 @@ interface ProcessInfo {
 
 Plugin 重启后 reconcile：检查 PID 是否存活，更新 Run 状态（alive / lost）。
 
+### 18.1 Run 即 DSH 后台任务（v0.1.4 起）
+
+Run 完成必须能**唤醒 agent**，而不是让 agent 轮询 `lab_list_runs`。做法是把每次
+`lab_start_run` 注册进 DSH 通用任务注册表 `ctx.jobs`（与 `bash run_in_background`
+同一个）：
+
+```ts
+jobs.start({
+  kind: 'lab-run',                 // id 形如 lab-run-3
+  label: `${run.id} · ${title} · ${command}`,
+  owner: exec.agent,               // 由调用 agent 拥有 —— 唤醒的关键
+  outputLimitBytes: 12 * 1024,
+  run: () => ({
+    cancel: () => { killProcess(); stop(); },   // 必须同步发起 SIGTERM
+    done,                                        // run 进程退出并 finalize 后 settle
+    readOutput: () => stdoutDelta(),             // 流式 stdout 游标
+  }),
+})
+```
+
+契约要点：
+
+* **owner 决定投递**：`dsh-tool-jobs` 注册的完成监听器按 owner 投递通知 —— idle 的
+  属主会话被 `followup` 唤醒（消耗一次 wake 预算），否则 `inject` 一条 notice。
+  没有 owner（RPC/CLI 调用）则不注册，行为与今天一致。
+* **`jobs.start` 前置检查 controller**：若挂载的 preset 没有 `tool-jobs`，注册会抛
+  "no job controller serves this agent"；桥接层吞掉异常并返回 undefined，run 照常执行，
+  只丢失唤醒能力。
+* **`done` 必须是最终状态**：`RunService.onRunExit` 在 `finalize()` **之后**触发，桥接
+  再去读 run 记录，因此 completed/killed/failed 与面板一致。
+* **`cancel` 必须同步**：jobs 契约要求 `cancel()` 同步发出终止；`LocalRunner.stop()`
+  在首个 await 之前就对进程组发 SIGTERM，随后 `stop()` 做状态/GPU/worktree 收尾。
+* **属主销毁即取消**：agent 被 dispose 时注册表会 cancel 其 owned job —— 会话销毁会停掉
+  它启动的训练，与后台 bash 语义一致。
+* **进程内生命周期**：注册表记录与 runner 的 live map 一样是进程内的；宿主重启后 adopt
+  的 run 不被观察，仍由 `.exit_code` 驱动的跨进程 finalize 收尾。
+
+被唤醒之外的读取路径同样复用通用工具：`job_output <lab-run-N>` 流式读 run 的
+`stdout.log`，`job_kill` 与 `lab_stop_run` 等价。实现见
+`packages/lab-host/src/run-jobs.ts`，另有 `runs.log` RPC 端点供面板读尾部日志。
+
 ---
 
 ## 19. Resource Model & GPU Reservation

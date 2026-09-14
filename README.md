@@ -41,6 +41,34 @@ pnpm test
 Integration and e2e tests exercise the sibling test sandbox at
 `/home2/zhanghanjin/WorkSpace/dsh-scholar` (see `.dsh/skills/dsh-scholar`).
 
+## Run execution is a DSH background job
+
+`lab_start_run` registers every run it launches in the generic job registry
+(`ctx.jobs`, the same registry `bash run_in_background` uses) as kind
+`lab-run`, **owned by the calling agent**:
+
+- the mounted job controller delivers an in-session completion notice when the
+  run settles, and wakes an idle owning session (`followup`) — the agent no
+  longer has to poll `lab_list_runs` to learn that training finished;
+- `job_output <lab-run-N>` streams the run's `stdout.log` (byte cursor, one
+  consumer), `job_kill` / `lab_stop_run` SIGTERM the detached process group;
+- disposing the owning session cancels its runs, mirroring background bash.
+
+The bridge is best-effort: without a jobs service (or without a controller
+serving the owner) the run executes exactly as before and only the wake-up is
+lost. Registry records are process-local; runs adopted after a host restart
+finish through the store's cross-process finalize. See
+`packages/lab-host/src/run-jobs.ts`.
+
+## Panel (read-only observation)
+
+The DLab page tab in the native right sidebar shows the research evolution
+graph, a Runs list and an Activity feed. Run/solution details carry an explicit
+**← Back** button, run titles fall back to a readable argv rendering
+(`.venv/bin/python train.py --config /lab/configs/a.yaml` →
+`python train.py --config ./configs/a.yaml`), and each run's detail shows the
+live **output tail** (stdout + stderr) via `runs.log`.
+
 ## Phase 1 goal
 
 Before any UI work: a CLI that can complete
