@@ -68,6 +68,11 @@ declare module '@deepseek-ai/cordis' {
 const LAB_MARKER = '.dsh-lab/lab.sqlite'
 /** Cap the cwd walk-up so a stray session cannot stat the whole disk. */
 const MAX_WALK_UP = 15
+/**
+ * Queue pump backstop per surface: promote queued runs when cards were
+ * released by another process. In-process releases pump immediately.
+ */
+const QUEUE_PUMP_INTERVAL_MS = 15_000
 
 /** Prompt-section text for a session whose workspace belongs to no lab. */
 const NO_LAB_HINT = [
@@ -588,6 +593,16 @@ export class LabService extends Service {
           if (proj?.name) s!.projectName = proj.name
         }).catch(() => {})
       }
+      // queue backstop: pump this lab's waiting runs periodically, so cards
+      // released by ANOTHER process (e.g. the CLI stopping a run) still
+      // promote queued runs. In-process releases pump immediately in core.
+      void core.runs.pump().catch(() => {})
+      this.ctx.effect(() => {
+        const timer = setInterval(() => {
+          void core.runs.pump().catch(() => {})
+        }, QUEUE_PUMP_INTERVAL_MS)
+        return () => clearInterval(timer)
+      })
     }
     return s
   }

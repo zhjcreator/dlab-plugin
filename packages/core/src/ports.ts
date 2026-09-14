@@ -107,6 +107,11 @@ export interface StorePort {
   tryReserveGpus(gpuIds: number[], runId: string): Promise<boolean>
   /** Release every reservation held by one run (owner-correct by run_id). */
   releaseGpus(runId: string): Promise<void>
+  /**
+   * Atomically flip a run's status guarded by the expected `from` value —
+   * the queue's queued→starting claim (and its requeue) ride on this.
+   */
+  transitionRunStatus(runId: string, from: RunStatus, to: RunStatus): Promise<boolean>
 
   listEvents(limit?: number): Promise<import('@dsh-lab/shared').LabEvent[]>
   appendEvent(event: { type: import('@dsh-lab/shared').LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void>

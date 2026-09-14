@@ -201,7 +201,25 @@ function makeRunJobHooks(surface: LabSurface, run: RunView): JobHooks {
       void surface.runs.stop(run.id).catch(() => {})
     },
     done,
-    readOutput: makeRunLogReader(surface, run.runDir),
+    readOutput: makeQueuedHintReader(surface, run),
+  }
+}
+
+/**
+ * Reader for a possibly-queued run: until real stdout exists, the FIRST
+ * read returns one status line instead of an empty stream, so job_output
+ * on a waiting run explains itself.
+ */
+function makeQueuedHintReader(surface: LabSurface, run: RunView): () => string {
+  const read = makeRunLogReader(surface, run.runDir)
+  if (run.status !== 'queued') return read
+  let announced = false
+  return () => {
+    const chunk = read()
+    if (chunk) return chunk
+    if (announced) return ''
+    announced = true
+    return `${run.id} queued · waiting for GPU allocation\n`
   }
 }
 

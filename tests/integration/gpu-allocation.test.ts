@@ -83,7 +83,7 @@ describe('GPU allocation (DESIGN §19)', () => {
     await runs.stop(d.id)
   })
 
-  it('concurrent starters get distinct ids and never share a card', async () => {
+  it('concurrent starters get distinct ids; a full machine queues the extra run', async () => {
     // two free cards left (0 and 3): two concurrent submissions must land
     // on DISTINCT cards — the race the old REPLACE-reservation lost
     const [x, y] = await Promise.all([start('conc-x'), start('conc-y')])
@@ -91,37 +91,49 @@ describe('GPU allocation (DESIGN §19)', () => {
     const claimed = [x.resources.gpuIds, y.resources.gpuIds]
     expect(claimed.every((g) => g !== undefined)).toBe(true)
     expect(new Set(claimed.map((g) => g![0]))).toEqual(new Set([0, 3]))
-    // a third submission with every card held: implicit request → CPU
-    // fallback (no gpuIds), never a crash and never a stolen card
+    // a third submission with every card held QUEUES — never a crash, never
+    // a stolen card, and never a silent CPU run
     const z = await start('conc-z')
+    expect(z.status).toBe('queued')
     expect(z.resources.gpuIds).toBeUndefined()
+    // releasing a card promotes it automatically
     await runs.stop(x.id).catch(() => undefined)
+    await new Promise((r) => setTimeout(r, 500))
+    const promoted = await runs.get(z.id)
+    expect(['running', 'succeeded']).toContain(promoted.status)
+    expect(promoted.resources.gpuIds).toEqual([x.resources.gpuIds![0]])
     await runs.stop(y.id).catch(() => undefined)
     await runs.stop(z.id).catch(() => undefined)
   })
 
-  it('an explicit request fails loudly instead of silently running on CPU', async () => {
-    // cards 1,2 are still held; 3 cards cannot be mustered
-    await expect(start('loud-fail', { mode: 'auto', gpuCount: 3 })).rejects.toThrow(/not enough free GPUs/)
+  it('an unsatisfiable request fails immediately; a merely-busy one queues', async () => {
+    // cards 1,2 are still held (plus conc-z may hold one): a 3-card request
+    // fits the hardware but not the current occupancy → QUEUE, don't fail
+    const busy = await start('busy-queue', { mode: 'auto', gpuCount: 3 })
+    expect(busy.status).toBe('queued')
+    // more cards than the machine has → impossible → fail loudly, nothing queued
+    await expect(start('loud-fail', { mode: 'auto', gpuCount: 5 })).rejects.toThrow(/not enough free GPUs/)
     const failed = (await runs.list()).find((r) => r.title === 'loud-fail')!
     expect(failed.status).toBe('failed')
     expect(failed.resources.gpuIds).toBeUndefined()
-    // the aborted start cleaned up its worktree
     expect(existsSync(join(labRoot, failed.worktreePath ?? 'nowhere'))).toBe(false)
-    // and left the live reservations untouched
-    const reserved = await deps.store.listReservations()
-    expect(reserved.map((r) => r.gpuId).sort()).toEqual([1, 2])
+    await runs.stop(busy.id).catch(() => undefined)
   })
 
-  it('pinned gpuIds are honored and protected from double-booking', async () => {
+  it('pinned gpuIds are honored; a busy pin queues for THAT card', async () => {
     const pinned = await start('pin-1', { mode: 'explicit', gpuIds: [0] })
     expect(pinned.resources.gpuIds).toEqual([0])
-    await expect(start('pin-2', { mode: 'explicit', gpuIds: [0] })).rejects.toThrow(
-      /GPU 0 is reserved by another run/,
-    )
-    const failed = (await runs.list()).find((r) => r.title === 'pin-2')!
-    expect(failed.status).toBe('failed')
+    // the same pin while card 0 is held QUEUES (waiting for card 0), instead
+    // of failing or stealing the card
+    const waiter = await start('pin-2', { mode: 'explicit', gpuIds: [0] })
+    expect(waiter.status).toBe('queued')
+    // releasing card 0 promotes the waiter onto exactly that card
     await runs.stop(pinned.id)
+    await new Promise((r) => setTimeout(r, 500))
+    const promoted = await runs.get(waiter.id)
+    expect(['running', 'succeeded']).toContain(promoted.status)
+    expect(promoted.resources.gpuIds).toEqual([0])
+    await runs.stop(waiter.id).catch(() => undefined)
   })
 
   it('stale reservations (missing/terminal run) are swept on the next allocation', async () => {

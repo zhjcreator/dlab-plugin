@@ -356,6 +356,22 @@ export class SqliteStore implements StorePort {
     return Promise.resolve(allocate.immediate(input))
   }
 
+  /**
+   * Atomically flip a run between two statuses (single UPDATE guarded by
+   * the expected `from` status). False when another process won the race —
+   * the queue's queued→starting claim and its requeue both ride on this.
+   */
+  transitionRunStatus(
+    runId: string,
+    from: import('@dsh-lab/shared').RunStatus,
+    to: import('@dsh-lab/shared').RunStatus,
+  ): Promise<boolean> {
+    const result = this.db
+      .prepare('UPDATE runs SET status = ? WHERE id = ? AND status = ?')
+      .run(to, runId, from)
+    return Promise.resolve(result.changes === 1)
+  }
+
   listReservations(): Promise<import('@dsh-lab/shared').GpuReservation[]> {
     const rows = this.db
       .prepare('SELECT gpu_id, run_id, reserved_at FROM gpu_reservations')

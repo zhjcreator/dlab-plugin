@@ -1027,14 +1027,25 @@ interface RunResourceRequest {
 }
 ```
 
-* `mode=explicit` → 直接使用 `gpuIds`，写 `CUDA_VISIBLE_DEVICES=<ids>`；目标卡不存在/被预约/显存不足时响亮失败（不再静默顶号）
+* `mode=explicit` → 直接使用 `gpuIds`，写 `CUDA_VISIBLE_DEVICES=<ids>`；目标卡不存在（硬件上没有该 id）时响亮失败，被占用时排队等那张卡（不再静默顶号）
 * `mode=auto` → 由本插件 GPU Scheduler 探测 `nvidia-smi`、按 `gpuCount` + `minFreeVramMB` 选 GPU
 * reservation 通过 SQLite 表 `gpu_reservations(gpu_id PK, run_id, reserved_at)` 保证并发原子性：`tryReserveGpus` 在单个 immediate 写事务里 check-then-insert（in- and cross-process），抢输的一方换候选卡重试
 * "scheduler.lock" 即上述 SQLite 写事务；分配排除所有活跃 run 的预约卡（`allocate(request, { excludedGpuIds })`），预约自 run 落库（starting 骨架行）起生效——短时间连续提交会摊到不同卡，而不是挤在同一张
 * 释放按 `run_id` 归属（finalize/stop）；run 缺失或已终态的预约行在下次分配时自愈清扫
 * run id 由 `allocateRunId` 在同一事务内 COUNT+INSERT 骨架行原子分配，并发提交不会撞号
-* 资源快照（`lab_get_resources` / 面板）合并预约：已提交、尚未分配显存的卡也计入 runningRunIds
-* 显式请求（gpuCount/gpuIds/minFreeVramMB）无卡可用时响亮失败；未请求 GPU 的 run 尽力拿一块空卡、拿不到则不带 `CUDA_VISIBLE_DEVICES` 运行（CPU 回退）
+* 资源快照（`lab_get_resources` / 面板）合并预约：已提交、尚未分配显存的卡也计入 runningRunIds；`queued` 字段按队列顺序列出等待的 run
+
+### 19.1 GPU 等待队列（v0.2.0 起）
+
+**满卡即排队，不失败、不静默跑 CPU**（能 GPU 的必须 GPU；真正无需 GPU 的杂务走后台 bash，而非 dlab run）：
+
+* **提交**：快照在**提交时**拍（Scenario B 跨排队等待成立——"提交的是什么，拿到卡后跑的就是什么"；快照 ref 永久保留，提升时从 ref materialize worktree，抗分支变化）。有空卡 → 原快速路径直接 starting→running；满卡 → `status='queued'` 落库（资源请求记在 `resources_json`），worktree 延迟到提升时创建
+* **分类**：分配失败时先判硬件——机器无 GPU 且未请求 → 不带 `CUDA_VISIBLE_DEVICES` 运行（唯一的 CPU 路径，保住无卡机器/CI）；请求在该硬件上永不可能（未知 gpuIds / 卡数超过机器 / minFreeVramMB 超过任何卡总量）→ 响亮失败；否则 → 排队。队列深度上限 50，防失控提交
+* **提升（pump）**：FIFO 按提交序扫描 + first-fit（队头大请求不阻塞后面的小请求）；`queued→starting` 用单条 `UPDATE ... WHERE status='queued'` 原子认领，多进程并发 pump 不会双启动；抢卡输给并发者 → 放回队列；launch 本身失败 → 记 failed 不重排
+* **触发**：进程内 finalize/stop 释放预约后立即 pump；每个 surface 一个 15s 兜底定时器（跨进程释放，如 CLI 停 run，靠定时器追上）；`syncRunStatus` 对 queued 原样返回（惰性读取绝不把排队 run 判成 lost）
+* **取消**：`lab_stop_run` 对 queued 直接 canceled（无进程可杀、无卡可放）；launch 进行中被 stop → 启动器检测到终态后杀掉刚拉起的进程、不复活（终态守卫）
+* **可见性**：`lab_get_resources.queued` 按序列出（位置即下标+1）；`job_output` 对排队 run 的首次读取返回一行排队状态；事件流记录 `RunQueued`/`RunPromoted`
+* **与批唤醒（§18.1）组合**：排队 run 提交时即注册 per-run job 并加入伞——伞等它真正跑完才 drain，模型一次提交 12 个（8 跑 4 排队）仍然只在全部结束时唤醒一次
 
 ---
 

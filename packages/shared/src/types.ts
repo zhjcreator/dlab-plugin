@@ -149,6 +149,8 @@ export type LabEventType =
   | 'SolutionRestored'
   | 'SolutionMerged'
   | 'RunCreated'
+  | 'RunQueued'
+  | 'RunPromoted'
   | 'RunStarted'
   | 'RunCompleted'
   | 'RunFailed'

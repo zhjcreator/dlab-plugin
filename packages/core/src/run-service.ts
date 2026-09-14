@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import { InvalidStateError, NotFoundError, resolveInside } from '@dsh-lab/shared'
 import type {
   ExperimentRun,
+  GpuState,
   ResourceView,
   RunMetric,
   RunResourceRequest,
@@ -57,6 +58,12 @@ export interface StartRunInput {
  * still working. After the window a crashed launch self-heals to 'lost'.
  */
 const STARTING_GRACE_MS = 120_000
+
+/**
+ * Queue depth cap: a runaway submit loop must not enqueue unbounded work.
+ * Refuses loudly (the submitter decides what to stop or wait for).
+ */
+const MAX_QUEUED_RUNS = 50
 
 /**
  * Observer of an in-process run process exit. Fired AFTER the run record is
@@ -118,12 +125,13 @@ export class RunService {
   /**
    * Launch one experiment run:
    *   1. run identity: atomic counter + starting-row skeleton
-   *   2. immutable snapshot of the solution working tree (temp index)
-   *   3. detached run worktree at the snapshot commit
-   *   4. run directory with manifest + logs, starting record persisted
-   *   5. GPU allocation: binding, atomic store reservation (DESIGN §19)
-   *   6. process spawn with DSH_LAB_* env
-   *   7. exit observation → succeeded/failed + worktree cleanup + metrics
+   *   2. immutable snapshot of the solution working tree AT SUBMISSION —
+   *      what you submitted is what runs, whenever cards free up
+   *   3. run directory skeleton, submitted record persisted
+   *   4. GPU allocation: binding, atomic store reservation (DESIGN §19);
+   *      when every card is busy the run QUEUES instead of failing
+   *   5. detached run worktree at the snapshot commit + process spawn
+   *   6. exit observation → succeeded/failed + worktree cleanup + metrics
    */
   async start(input: StartRunInput): Promise<ExperimentRun> {
     if (input.command.length === 0) throw new InvalidStateError('run command must not be empty')
@@ -147,7 +155,9 @@ export class RunService {
     })
     const refName = `${this.config.runRefPrefix}${id}`
 
-    // 2. immutable snapshot (captures uncommitted work; never touches the branch)
+    // 2. immutable snapshot at SUBMISSION (captures uncommitted work; never
+    //    touches the branch). The snapshot ref is retained forever, so a run
+    //    promoted hours later still materializes exactly what was submitted.
     const snapshotCommit = await this.deps.git.commitTreeSnapshot(
       solutionDir,
       refName,
@@ -155,21 +165,16 @@ export class RunService {
     )
     const sourceHead = await this.deps.git.branchHead(solution.branch)
 
-    // 3. detached run worktree at the snapshot
-    const worktreeRel = `${this.config.runWorktreesDir}/${id}`
-    await this.deps.git.addWorktree(worktreeRel, snapshotCommit, { detach: true })
-    const worktreeAbs = resolveInside(this.config.projectRoot, worktreeRel)
-
-    // 4. run directory skeleton
+    // 3. run directory skeleton (cheap; no worktree until cards are held)
     const runDirAbs = resolveInside(this.config.projectRoot, runDirRel)
     for (const sub of ['logs', 'environment', 'metrics', 'artifacts', 'configs']) {
       mkdirSync(resolve(runDirAbs, sub), { recursive: true })
     }
 
-    // 5. environment fingerprint
+    // 4. environment fingerprint
     const envProbe = await this.deps.runner.probeEnvironment(this.config.projectRoot)
 
-    // 6. persist the starting record BEFORE any GPU claim
+    // 5. persist the submitted record BEFORE any GPU claim
     const resources: RunResourceRequest = { mode: 'explicit', ...(input.resources ?? {}) }
     const run: ExperimentRun = {
       id,
@@ -183,14 +188,13 @@ export class RunService {
       command: input.command,
       resources,
       runDir: runDirRel,
-      worktreePath: worktreeRel,
       environmentFingerprint: envProbe.fingerprint,
       createdAt: Date.now(),
     }
     await this.persistRun(run)
     writeFileSync(
       resolve(runDirAbs, 'manifest.json'),
-      JSON.stringify({ ...run, runDirAbsolute: runDirAbs, worktreeAbsolute: worktreeAbs }, null, 2),
+      JSON.stringify({ ...run, runDirAbsolute: runDirAbs }, null, 2),
     )
     writeFileSync(resolve(runDirAbs, 'command.json'), JSON.stringify({ argv: input.command }, null, 2))
     if (envProbe.pythonVersion || envProbe.requirements) {
@@ -204,30 +208,82 @@ export class RunService {
       }
     }
 
-    // 7. GPU allocation — binding reservation (DESIGN §19). An explicit
-    //    request fails loudly (never a silent CPU run); a run that asked for
-    //    nothing proceeds unreserved when no card is free.
+    // 6. GPU allocation — binding reservation (DESIGN §19). Free card → the
+    //    same fast path as always; every card busy → queue, never a silent
+    //    CPU run (see onAllocationRefused).
+    let gpuIds: number[] | undefined
     try {
-      resources.gpuIds = await this.allocateGpus(id, input.resources)
+      gpuIds = await this.allocateGpus(id, input.resources)
     } catch (error) {
-      if (input.resources !== undefined) {
-        await this.abortStart(run).catch(() => undefined)
-        throw error
-      }
-      // unrequested: no GPUs available / no nvidia-smi → run on CPU
+      return this.onAllocationRefused(run, input.resources, error)
     }
-    // the row carries its reservation (or the CPU fallback) from here on
-    await this.persistRun(run)
+    return this.launch(run, gpuIds)
+  }
 
-    // 8. process environment
+  /**
+   * An allocation attempt failed. Three outcomes:
+   *  - the machine has no GPUs and nothing was requested → proceed on CPU
+   *    (a GPU-less box must not queue forever; the ONLY CPU path left);
+   *  - the request is unsatisfiable on this hardware (unknown pinned ids,
+   *    more cards than exist, minFreeVramMB above every card) → fail loudly;
+   *  - GPUs exist, the request fits some subset of them, but all are busy →
+   *    QUEUE: the run starts when cards free (FIFO first-fit pump).
+   */
+  private async onAllocationRefused(
+    run: ExperimentRun,
+    request: RunResourceRequest | undefined,
+    error: unknown,
+  ): Promise<ExperimentRun> {
+    const hardware = await this.deps.scheduler.discover()
+    if (hardware.length === 0 && request === undefined) {
+      // GPU-less machine, nothing requested: proceed unreserved (no CUDA_VISIBLE_DEVICES)
+      return this.launch(run, undefined)
+    }
+    if (hardware.length === 0 || RunService.requestImpossibleOn(request, hardware)) {
+      await this.abortStart(run).catch(() => undefined)
+      throw error
+    }
+    const waiting = await this.deps.store.listRuns({ status: 'queued' })
+    if (waiting.length >= MAX_QUEUED_RUNS) {
+      await this.abortStart(run).catch(() => undefined)
+      throw new Error(`run queue is full (${waiting.length} waiting) — stop runs or wait for cards to free`)
+    }
+    const queued: ExperimentRun = { ...run, status: 'queued' }
+    await this.persistRun(queued)
+    await this.deps.store
+      .appendEvent({ type: 'RunQueued', entityType: 'run', entityId: run.id, payload: { request: run.resources } })
+      .catch(() => undefined)
+    return queued
+  }
+
+  /**
+   * Materialize a submitted run: detached worktree at the submission
+   * snapshot, reserved cards (none on a GPU-less box), process spawn.
+   * Shared by the direct fast path and queue promotion.
+   */
+  private async launch(run: ExperimentRun, gpuIds: number[] | undefined): Promise<ExperimentRun> {
+    const solution = await this.deps.store.getSolution(run.solutionId)
+    const resources: RunResourceRequest = { ...run.resources, ...(gpuIds ? { gpuIds } : {}) }
+    const worktreeRel = `${this.config.runWorktreesDir}/${run.id}`
+    await this.deps.git.addWorktree(worktreeRel, run.snapshotCommit, { detach: true })
+    const worktreeAbs = resolveInside(this.config.projectRoot, worktreeRel)
+    const runDirAbs = this.runDirAbs(run)
+
+    const withResources: ExperimentRun = { ...run, resources, worktreePath: worktreeRel }
+    await this.persistRun(withResources)
+    writeFileSync(
+      resolve(runDirAbs, 'manifest.json'),
+      JSON.stringify({ ...withResources, runDirAbsolute: runDirAbs, worktreeAbsolute: worktreeAbs }, null, 2),
+    )
+
     const procEnv: Record<string, string> = {
       DSH_LAB_PROJECT_ROOT: this.config.projectRoot,
-      DSH_LAB_SOLUTION_ID: solution.id,
-      DSH_LAB_SOLUTION_NAME: solution.slug,
-      DSH_LAB_RUN_ID: id,
+      DSH_LAB_SOLUTION_ID: run.solutionId,
+      DSH_LAB_SOLUTION_NAME: solution?.slug ?? run.solutionId,
+      DSH_LAB_RUN_ID: run.id,
       DSH_LAB_RUN_DIR: runDirAbs,
-      DSH_LAB_SNAPSHOT_COMMIT: snapshotCommit,
-      ...(resources.gpuIds ? { CUDA_VISIBLE_DEVICES: resources.gpuIds.join(',') } : {}),
+      DSH_LAB_SNAPSHOT_COMMIT: run.snapshotCommit,
+      ...(gpuIds ? { CUDA_VISIBLE_DEVICES: gpuIds.join(',') } : {}),
     }
     const venvBin = resolve(this.config.projectRoot, this.config.venvDir, 'bin')
     if (existsSync(venvBin)) {
@@ -235,36 +291,96 @@ export class RunService {
       procEnv.PATH = `${venvBin}:${process.env.PATH ?? ''}`
     }
 
-    // 9. launch
     try {
       const spawned = await this.deps.runner.spawn({
-        key: id,
+        key: run.id,
         cwd: worktreeAbs,
-        argv: [...RUN_WRAPPER, ...input.command],
+        argv: [...RUN_WRAPPER, ...run.command],
         env: procEnv,
         logDir: resolve(runDirAbs, 'logs'),
         onExit: (code) => {
-          void this.finalize(id, code)
+          void this.finalize(run.id, code)
             .catch(() => {
               /* finalize failures are logged by the host adapter */
             })
-            .then(() => this.notifyExit(id, code))
+            .then(() => this.notifyExit(run.id, code))
         },
       })
 
       const started: ExperimentRun = {
-        ...run,
+        ...withResources,
         status: 'running',
         pid: spawned.pid,
         pgid: spawned.pgid,
         startedAt: Date.now(),
       }
+      // a stop that landed while we were launching must not be resurrected:
+      // if the row went terminal, kill what we just spawned and honor it
+      const current = await this.deps.store.getRun(run.id)
+      if (current && isTerminal(current.status)) {
+        void this.deps.runner.stop(run.id).catch(() => undefined)
+        await this.deps.store.releaseGpus(run.id)
+        return current
+      }
       await this.persistRun(started)
       return started
     } catch (error) {
-      await this.abortStart(run).catch(() => undefined)
+      await this.abortStart(withResources).catch(() => undefined)
       throw error
     }
+  }
+
+  // ── GPU queue (DESIGN §19) ────────────────────────────────────────────────
+
+  /**
+   * Promote queued runs onto free cards: FIFO by submission, first-fit —
+   * the earliest queued run whose request the free cards satisfy goes
+   * first, so a big head-of-queue request never blocks smaller ones behind
+   * it. The queued→starting claim is atomic, so concurrent pumps (release
+   * hook, interval, another process) never double-launch a run.
+   */
+  async pump(): Promise<string[]> {
+    const promoted: string[] = []
+    const waiting = (await this.deps.store.listRuns({ status: 'queued' })).sort(
+      (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
+    )
+    for (const run of waiting) {
+      if (!(await this.deps.store.transitionRunStatus(run.id, 'queued', 'starting'))) continue
+      try {
+        const gpuIds = await this.allocateGpus(run.id, run.resources)
+        try {
+          await this.launch(run, gpuIds)
+          promoted.push(run.id)
+          await this.deps.store
+            .appendEvent({ type: 'RunPromoted', entityType: 'run', entityId: run.id, payload: { gpuIds } })
+            .catch(() => undefined)
+        } catch {
+          // launch itself broke (worktree/spawn): fail the run, don't requeue
+          await this.abortStart({ ...run, status: 'starting' }).catch(() => undefined)
+        }
+      } catch {
+        // still no satisfiable cards (lost a race): back to the queue —
+        // unless the hardware can no longer satisfy the request at all
+        const hardware = await this.deps.scheduler.discover()
+        if (hardware.length === 0 || RunService.requestImpossibleOn(run.resources, hardware)) {
+          await this.abortStart({ ...run, status: 'starting' }).catch(() => undefined)
+        } else {
+          await this.deps.store.transitionRunStatus(run.id, 'starting', 'queued')
+        }
+      }
+    }
+    return promoted
+  }
+
+  /** Whether a request can NEVER be satisfied by this hardware (as opposed to merely being busy). */
+  private static requestImpossibleOn(request: RunResourceRequest | undefined, hardware: GpuState[]): boolean {
+    const ids = new Set(hardware.map((g) => g.id))
+    const count = request?.gpuIds?.length ?? request?.gpuCount ?? 1
+    const maxTotal = Math.max(...hardware.map((g) => g.totalVramMB))
+    if (count > hardware.length) return true
+    if (request?.gpuIds?.some((id) => !ids.has(id))) return true
+    if ((request?.minFreeVramMB ?? 0) > maxTotal) return true
+    return false
   }
 
   // ── GPU allocation (DESIGN §19) ───────────────────────────────────────────
@@ -311,7 +427,11 @@ export class RunService {
    */
   private async abortStart(run: ExperimentRun): Promise<void> {
     await this.deps.store.releaseGpus(run.id)
-    await this.persistRun({ ...run, status: 'failed', finishedAt: Date.now() })
+    // never overwrite a terminal row (e.g. a stop that won the launch race)
+    const current = await this.deps.store.getRun(run.id)
+    if (!current || !isTerminal(current.status)) {
+      await this.persistRun({ ...run, status: 'failed', finishedAt: Date.now() })
+    }
     if (run.worktreePath) {
       await this.deps.git.removeWorktree(run.worktreePath, { force: true }).catch(() => undefined)
     }
@@ -340,6 +460,8 @@ export class RunService {
 
     // release this run's GPU reservations (by owner — never another run's)
     await this.deps.store.releaseGpus(run.id)
+    // freed cards may promote waiting runs
+    void this.pump().catch(() => undefined)
 
     // remove the run worktree; the snapshot ref stays forever
     if (run.worktreePath) {
@@ -397,9 +519,14 @@ export class RunService {
       list.push(runId)
       byGpu.set(gpuId, list)
     }
+    // the waiting list, in queue order — position is index + 1
+    const queued = (await this.deps.store.listRuns({ status: 'queued' }))
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+      .map((r) => ({ runId: r.id, need: r.resources }))
     return {
       ...snap,
       gpus: snap.gpus.map((g) => ({ ...g, runningRunIds: byGpu.get(g.id) ?? g.runningRunIds })),
+      queued,
     }
   }
 
@@ -411,6 +538,9 @@ export class RunService {
    */
   private async syncRunStatus(run: ExperimentRun): Promise<ExperimentRun> {
     if (isTerminal(run.status)) return run
+    // a QUEUED run is stable: only the queue pump or an explicit stop may
+    // transition it — a lazy reader must never finalize it as lost
+    if (run.status === 'queued') return run
     // a launching run (skeleton persisted, not yet spawned) must not be
     // finalized as lost by a concurrent reader — give the launcher its window
     if (
@@ -459,6 +589,8 @@ export class RunService {
     // release this run's reservations (by owner) + clean the worktree eagerly;
     // the exit callback may race
     await this.deps.store.releaseGpus(run.id)
+    // freed cards may promote waiting runs
+    void this.pump().catch(() => undefined)
     if (run.worktreePath) {
       await this.deps.git.removeWorktree(run.worktreePath, { force: true }).catch(() => undefined)
     }
