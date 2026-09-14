@@ -478,7 +478,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_start_run',
       description:
-        'Start an experiment run: snapshot the solution tree AT SUBMISSION (uncommitted work included, branch untouched) and execute the command in a detached run worktree with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN — later edits never affect the run, even while it waits in queue. GPU selection belongs to dlab: the command must be card-agnostic (never assign CUDA_VISIBLE_DEVICES in the command or script — rejected; a script hardcoding export has the same effect). Pass gpuCount (any N free cards; torchrun-style launchers compose: allocated cards renumber to 0..N-1 inside) or gpuIds (pin exact cards; queues while they are busy). Every card busy → the run QUEUES (FIFO first-fit) and starts as cards free; unknown gpuIds or more cards than the machine has → immediate failure. Result fields: dshJobId (job_output streams this run; job_kill stops it) and batchJobId (job_output streams ALL your live runs interleaved). Your session is woken exactly ONCE after ALL its lab runs settle — do not busy-poll; stopping the last live run also settles the batch.',
+        'Start an experiment run: snapshot the solution tree AT SUBMISSION (uncommitted work included, branch untouched) and execute the command in a detached run worktree with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN — later edits never affect the run, even while it waits in queue. GPU selection belongs to dlab: the command must be card-agnostic (never assign CUDA_VISIBLE_DEVICES in the command or script — rejected; a script hardcoding export has the same effect). Pass gpuCount (any N free cards; torchrun-style launchers compose: allocated cards renumber to 0..N-1 inside) or gpuIds (pin exact cards; queues while they are busy). A batch or sweep passes gpuCount for EVERY run: dlab hands each run a distinct free card, so no run waits while a satisfiable card is free. gpuIds instead WAITS for the named cards, so repeating one pin across a batch parks that batch on a single card while the other cards sit idle. Every card busy → the run QUEUES (FIFO first-fit) and starts as cards free; unknown gpuIds or more cards than the machine has → immediate failure. Result fields: dshJobId (job_output streams this run; job_kill stops it) and batchJobId (job_output streams ALL your live runs interleaved). Your session is woken exactly ONCE after ALL its lab runs settle — do not busy-poll; stopping the last live run also settles the batch.',
       parameters: {
         solution: { type: 'string', required: true, description: 'Solution id or slug' },
         command: {
@@ -503,7 +503,7 @@ export function apply(ctx: Context): void {
           type: 'array',
           items: { type: 'number' },
           description:
-            'Pin exactly these GPU ids (e.g. [3] or [0,1]); the run queues while any of them is busy. Prefer gpuCount unless a specific card is required.',
+            'Pin exactly these GPU ids (e.g. [3] or [0,1]); the run queues while any of them is busy. Prefer gpuCount unless a specific card is required, and never give the same pin to several runs of one batch — they would all wait for that one card while the other cards idle.',
         },
         minFreeVramMB: { type: 'number', description: 'Minimum free VRAM per GPU (MB)' },
       },

@@ -678,6 +678,7 @@ export class LabService extends Service {
           'Workflow (how to run an experiment):',
           '1. Edit code in YOUR solution worktree (solutions/<slug>/) — fork a new solution per hypothesis; never edit another solution directly.',
           '2. Launch with lab_start_run(solution, command, gpuCount): the command must be card-agnostic (never assign CUDA_VISIBLE_DEVICES — dlab injects the allocated cards; unknown cards are rejected). When every card is busy the run QUEUES and starts automatically as cards free — submit the whole batch at once.',
+          '   Card selection: give every run in a batch or sweep `gpuCount` (dlab picks a distinct free card per run). `gpuIds` PINS exact cards and a pinned run waits for THOSE cards — several runs pinned to the same card all wait for it while the other cards sit idle, so never repeat one pin across a batch.',
           '3. Do NOT poll: your session is woken exactly ONCE, after ALL your lab runs settle, with a summary of every run. Until then: job_output(dshJobId) tails one run, job_output(batchJobId) tails all of them interleaved; lab_stop_run / job_kill stops.',
           '4. After the wake: lab_get_run / lab_run_diff to inspect, lab_checkpoint_solution to record progress, lab_merge_solution into main only behind a succeeded run.',
           '',
