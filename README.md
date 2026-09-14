@@ -45,6 +45,15 @@ To expose the `dsh-lab` CLI on PATH in such a deployment, also depend on
 ln -sf ~/.dsh/profiles/<name>/node_modules/.bin/dsh-lab ~/.local/bin/dsh-lab
 ```
 
+The `dlab` usage skill (source: `packages/preset-lab/skills/dlab/`) teaches
+agents the experiment workflow — launching runs, card selection, queue and
+wake semantics, sweeps, merge gates. Install it user-globally so every
+session (any lab project) sees it in its skill catalog:
+
+```bash
+mkdir -p ~/.dsh/skills/dlab && cp packages/preset-lab/skills/dlab/SKILL.md ~/.dsh/skills/dlab/
+```
+
 ## Development
 
 ```bash

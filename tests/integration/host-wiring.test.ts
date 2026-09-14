@@ -303,6 +303,11 @@ describe('host wiring: LabService on real Cordis', () => {
     const text = promptSection!.text()
     expect(text).toContain('DSH LAB CONTEXT')
     expect(text).toContain('host-fork')
+    // the workflow cheat sheet teaches the launch loop up front (and the
+    // tool name must be the real one — an early version shipped `lab_run_start`)
+    expect(text).toContain('Workflow (how to run an experiment)')
+    expect(text).toContain('lab_start_run(solution, command, gpuCount)')
+    expect(text).not.toContain('lab_run_start')
   })
 
   it('full loop: checkpoint → merge fork→fork via RPC', async () => {

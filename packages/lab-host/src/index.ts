@@ -675,12 +675,18 @@ export class LabService extends Service {
         }
         lines.push(
           '',
+          'Workflow (how to run an experiment):',
+          '1. Edit code in YOUR solution worktree (solutions/<slug>/) — fork a new solution per hypothesis; never edit another solution directly.',
+          '2. Launch with lab_start_run(solution, command, gpuCount): the command must be card-agnostic (never assign CUDA_VISIBLE_DEVICES — dlab injects the allocated cards; unknown cards are rejected). When every card is busy the run QUEUES and starts automatically as cards free — submit the whole batch at once.',
+          '3. Do NOT poll: your session is woken exactly ONCE, after ALL your lab runs settle, with a summary of every run. Until then: job_output(dshJobId) tails one run, job_output(batchJobId) tails all of them interleaved; lab_stop_run / job_kill stops.',
+          '4. After the wake: lab_get_run / lab_run_diff to inspect, lab_checkpoint_solution to record progress, lab_merge_solution into main only behind a succeeded run.',
+          '',
           'Rules:',
           '- Do not modify another Solution workspace directly; use lab tools for fork/archive/merge.',
           `- Documents: shared knowledge (charter, roadmap, baseline references, lessons) lives ONLY in the project-root ${core.config.docsDir}/ directory, which every solution reaches through ${core.config.docLinkPath} — one physical copy, no per-experiment forks of it. Keep per-experiment notes inside the solution and promote conclusions with lab_promote_docs (archiving promotes automatically).`,
           '- Experiment first, promote only what worked: a merge into main is refused unless the line was forked and has at least one succeeded run (allowUnevidenced overrides deliberately).',
-          '- Experiment outputs should use DSH_LAB_RUN_DIR (Phase 3).',
-          '- Parameter sweeps: start each variant with `lab_run_start` on the SAME solution, sharing one `sweep/<name>` tag plus a per-run `<param>=<value>` tag. Do NOT checkpoint config tweaks per run — each run snapshot already captures its config; checkpoint only the winning config. Fork a new Solution only when the hypothesis itself changes.',
+          '- Experiment outputs write under $DSH_LAB_RUN_DIR (experiments/run-NNNNNN/); metrics/summary.json there is ingested automatically.',
+          '- Parameter sweeps: start each variant with `lab_start_run` on the SAME solution, sharing one `sweep/<name>` tag plus a per-run `<param>=<value>` tag. Do NOT checkpoint config tweaks per run — each run snapshot already captures its config; checkpoint only the winning config. Fork a new Solution only when the hypothesis itself changes.',
         )
       } else {
         lines.push('', 'No solutions yet — the lab is not initialized. Use lab tools or `dsh-lab init`.')
