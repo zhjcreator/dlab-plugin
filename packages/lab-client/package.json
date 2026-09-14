@@ -1,6 +1,6 @@
 {
   "name": "@dsh-lab/client",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "DSH browser-surface bundle for the Deep Learning Lab — DLab page tab in the official native right Sidebar with a conversation-header quick-entry button",
   "type": "module",
