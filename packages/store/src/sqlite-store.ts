@@ -279,6 +279,10 @@ export class SqliteStore implements StorePort {
            @pid, @pgid, @exitCode, @createdAt, @startedAt, @finishedAt
          )
          ON CONFLICT(id) DO UPDATE SET
+           snapshot_commit = excluded.snapshot_commit,
+           source_head_commit = excluded.source_head_commit,
+           command_json = excluded.command_json,
+           resources_json = excluded.resources_json,
            status = excluded.status,
            title = excluded.title,
            description = excluded.description,
@@ -319,27 +323,79 @@ export class SqliteStore implements StorePort {
 
   // ── counters / reservations / events ─────────────────────────────────────
 
-  async nextRunCounter(): Promise<number> {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE id LIKE 'run-%'").get() as { n: number }
-    return row.n + 1
+  /**
+   * Atomically allocate the next run identity and insert its starting-row
+   * skeleton: the COUNT + INSERT happen in one immediate write transaction,
+   * so concurrent starters (in- or cross-process) always get distinct ids,
+   * and every later GPU reservation references a run row that already
+   * exists (missing-run rows are sweepable as stale).
+   */
+  allocateRunId(input: {
+    projectId: string
+    solutionId: string
+    experimentsDir: string
+  }): Promise<{ id: string; runDir: string }> {
+    const allocate = this.db.transaction(
+      (inp: { projectId: string; solutionId: string; experimentsDir: string }) => {
+        const row = this.db
+          .prepare("SELECT COUNT(*) AS n FROM runs WHERE id LIKE 'run-%'")
+          .get() as { n: number }
+        const id = `run-${String(row.n + 1).padStart(6, '0')}`
+        const runDir = `${inp.experimentsDir}/${id}`
+        this.db
+          .prepare(
+            `INSERT INTO runs (
+               id, project_id, solution_id, snapshot_commit, source_head_commit,
+               status, command_json, resources_json, run_dir, created_at
+             ) VALUES (?, ?, ?, '', '', 'starting', '[]', '{}', ?, ?)`,
+          )
+          .run(id, inp.projectId, inp.solutionId, runDir, Date.now())
+        return { id, runDir }
+      },
+    )
+    return Promise.resolve(allocate.immediate(input))
   }
 
   listReservations(): Promise<import('@dsh-lab/shared').GpuReservation[]> {
     const rows = this.db
       .prepare('SELECT gpu_id, run_id, reserved_at FROM gpu_reservations')
-      .all() as import('@dsh-lab/shared').GpuReservation[]
-    return Promise.resolve(rows)
+      .all() as { gpu_id: number; run_id: string; reserved_at: number }[]
+    return Promise.resolve(
+      rows.map((r) => ({ gpuId: r.gpu_id, runId: r.run_id, reservedAt: r.reserved_at })),
+    )
   }
 
-  reserveGpu(gpuId: number, runId: string): Promise<void> {
-    this.db
-      .prepare('INSERT OR REPLACE INTO gpu_reservations (gpu_id, run_id, reserved_at) VALUES (?, ?, ?)')
-      .run(gpuId, runId, Date.now())
-    return Promise.resolve()
+  /**
+   * All-or-nothing reservation: succeeds only when NO listed gpu is already
+   * reserved. The gpu_id PK plus an immediate write transaction serialize
+   * concurrent starters in- and cross-process (DESIGN §19).
+   */
+  tryReserveGpus(gpuIds: number[], runId: string): Promise<boolean> {
+    if (gpuIds.length === 0) return Promise.resolve(true)
+    const reserve = this.db.transaction((ids: number[]): boolean => {
+      const placeholders = ids.map(() => '?').join(',')
+      const taken = this.db
+        .prepare(`SELECT gpu_id FROM gpu_reservations WHERE gpu_id IN (${placeholders})`)
+        .get(...ids) as { gpu_id: number } | undefined
+      if (taken) return false
+      const insert = this.db.prepare(
+        'INSERT INTO gpu_reservations (gpu_id, run_id, reserved_at) VALUES (?, ?, ?)',
+      )
+      for (const id of ids) insert.run(id, runId, Date.now())
+      return true
+    })
+    try {
+      return Promise.resolve(reserve.immediate(gpuIds))
+    } catch (error) {
+      // UNIQUE race lost to a concurrent transaction — the cards are taken
+      if ((error as { code?: string }).code?.startsWith('SQLITE_')) return Promise.resolve(false)
+      throw error
+    }
   }
 
-  releaseGpu(gpuId: number): Promise<void> {
-    this.db.prepare('DELETE FROM gpu_reservations WHERE gpu_id = ?').run(gpuId)
+  /** Release every reservation held by one run (owner-correct by run_id). */
+  releaseGpus(runId: string): Promise<void> {
+    this.db.prepare('DELETE FROM gpu_reservations WHERE run_id = ?').run(runId)
     return Promise.resolve()
   }
 

@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import { InvalidStateError, NotFoundError, resolveInside } from '@dsh-lab/shared'
 import type {
   ExperimentRun,
+  ResourceView,
   RunMetric,
   RunResourceRequest,
   RunStatus,
@@ -48,6 +49,14 @@ export interface StartRunInput {
   title?: string
   tags?: string[]
 }
+
+/**
+ * Grace window during which a persisted-but-not-yet-spawned 'starting' run
+ * is immune to lazy finalization: a concurrent reader must not mark a
+ * launching run lost (and sweep its GPU reservation) while its launcher is
+ * still working. After the window a crashed launch self-heals to 'lost'.
+ */
+const STARTING_GRACE_MS = 120_000
 
 /**
  * Observer of an in-process run process exit. Fired AFTER the run record is
@@ -108,11 +117,13 @@ export class RunService {
 
   /**
    * Launch one experiment run:
-   *   1. immutable snapshot of the solution working tree (temp index)
-   *   2. detached run worktree at the snapshot commit
-   *   3. run directory with manifest + logs
-   *   4. process spawn with DSH_LAB_* env and GPU allocation
-   *   5. exit observation → succeeded/failed + worktree cleanup + metrics
+   *   1. run identity: atomic counter + starting-row skeleton
+   *   2. immutable snapshot of the solution working tree (temp index)
+   *   3. detached run worktree at the snapshot commit
+   *   4. run directory with manifest + logs, starting record persisted
+   *   5. GPU allocation: binding, atomic store reservation (DESIGN §19)
+   *   6. process spawn with DSH_LAB_* env
+   *   7. exit observation → succeeded/failed + worktree cleanup + metrics
    */
   async start(input: StartRunInput): Promise<ExperimentRun> {
     if (input.command.length === 0) throw new InvalidStateError('run command must not be empty')
@@ -126,10 +137,14 @@ export class RunService {
     }
     const solutionDir = this.solutionWorktreeRel(solution)
 
-    // 1. counter-based run identity
-    const counter = await this.deps.store.nextRunCounter()
-    const id = `run-${String(counter).padStart(6, '0')}`
-    const runDirRel = `${this.config.experimentsDir}/${id}`
+    // 1. run identity. The skeleton row exists before anything else, so
+    //    (a) concurrent starters can never collide on an id, and (b) GPU
+    //    reservations always reference a run row that exists.
+    const { id, runDir: runDirRel } = await this.deps.store.allocateRunId({
+      projectId: solution.projectId,
+      solutionId: solution.id,
+      experimentsDir: this.config.experimentsDir,
+    })
     const refName = `${this.config.runRefPrefix}${id}`
 
     // 2. immutable snapshot (captures uncommitted work; never touches the branch)
@@ -154,39 +169,8 @@ export class RunService {
     // 5. environment fingerprint
     const envProbe = await this.deps.runner.probeEnvironment(this.config.projectRoot)
 
-    // 6. GPU allocation
-    const resources: RunResourceRequest & { gpuIds?: number[] } = {
-      mode: 'explicit',
-      ...(input.resources ?? {}),
-    }
-    let gpuIds: number[] | undefined
-    try {
-      gpuIds = await this.deps.scheduler.allocate(input.resources ?? { mode: 'explicit' })
-      for (const g of gpuIds) await this.deps.store.reserveGpu(g, id)
-    } catch {
-      // no GPUs available / no nvidia-smi: run proceeds unreserved (CPU)
-      gpuIds = undefined
-    }
-    if (gpuIds) resources.gpuIds = gpuIds
-
-    // 7. process environment
-    const procEnv: Record<string, string> = {
-      DSH_LAB_PROJECT_ROOT: this.config.projectRoot,
-      DSH_LAB_SOLUTION_ID: solution.id,
-      DSH_LAB_SOLUTION_NAME: solution.slug,
-      DSH_LAB_RUN_ID: id,
-      DSH_LAB_RUN_DIR: runDirAbs,
-      DSH_LAB_SNAPSHOT_COMMIT: snapshotCommit,
-    }
-    if (gpuIds) procEnv.CUDA_VISIBLE_DEVICES = gpuIds.join(',')
-    const venvBin = resolve(this.config.projectRoot, this.config.venvDir, 'bin')
-    if (existsSync(venvBin)) {
-      procEnv.VIRTUAL_ENV = resolve(this.config.projectRoot, this.config.venvDir)
-      procEnv.PATH = `${venvBin}:${process.env.PATH ?? ''}`
-    }
-
-    // 8. manifest before launch
-    const now = Date.now()
+    // 6. persist the starting record BEFORE any GPU claim
+    const resources: RunResourceRequest = { mode: 'explicit', ...(input.resources ?? {}) }
     const run: ExperimentRun = {
       id,
       projectId: solution.projectId,
@@ -201,7 +185,7 @@ export class RunService {
       runDir: runDirRel,
       worktreePath: worktreeRel,
       environmentFingerprint: envProbe.fingerprint,
-      createdAt: now,
+      createdAt: Date.now(),
     }
     await this.persistRun(run)
     writeFileSync(
@@ -220,31 +204,117 @@ export class RunService {
       }
     }
 
-    // 9. launch
-    const spawned = await this.deps.runner.spawn({
-      key: id,
-      cwd: worktreeAbs,
-      argv: [...RUN_WRAPPER, ...input.command],
-      env: procEnv,
-      logDir: resolve(runDirAbs, 'logs'),
-      onExit: (code) => {
-        void this.finalize(id, code)
-          .catch(() => {
-            /* finalize failures are logged by the host adapter */
-          })
-          .then(() => this.notifyExit(id, code))
-      },
-    })
-
-    const started: ExperimentRun = {
-      ...run,
-      status: 'running',
-      pid: spawned.pid,
-      pgid: spawned.pgid,
-      startedAt: Date.now(),
+    // 7. GPU allocation — binding reservation (DESIGN §19). An explicit
+    //    request fails loudly (never a silent CPU run); a run that asked for
+    //    nothing proceeds unreserved when no card is free.
+    try {
+      resources.gpuIds = await this.allocateGpus(id, input.resources)
+    } catch (error) {
+      if (input.resources !== undefined) {
+        await this.abortStart(run).catch(() => undefined)
+        throw error
+      }
+      // unrequested: no GPUs available / no nvidia-smi → run on CPU
     }
-    await this.persistRun(started)
-    return started
+    // the row carries its reservation (or the CPU fallback) from here on
+    await this.persistRun(run)
+
+    // 8. process environment
+    const procEnv: Record<string, string> = {
+      DSH_LAB_PROJECT_ROOT: this.config.projectRoot,
+      DSH_LAB_SOLUTION_ID: solution.id,
+      DSH_LAB_SOLUTION_NAME: solution.slug,
+      DSH_LAB_RUN_ID: id,
+      DSH_LAB_RUN_DIR: runDirAbs,
+      DSH_LAB_SNAPSHOT_COMMIT: snapshotCommit,
+      ...(resources.gpuIds ? { CUDA_VISIBLE_DEVICES: resources.gpuIds.join(',') } : {}),
+    }
+    const venvBin = resolve(this.config.projectRoot, this.config.venvDir, 'bin')
+    if (existsSync(venvBin)) {
+      procEnv.VIRTUAL_ENV = resolve(this.config.projectRoot, this.config.venvDir)
+      procEnv.PATH = `${venvBin}:${process.env.PATH ?? ''}`
+    }
+
+    // 9. launch
+    try {
+      const spawned = await this.deps.runner.spawn({
+        key: id,
+        cwd: worktreeAbs,
+        argv: [...RUN_WRAPPER, ...input.command],
+        env: procEnv,
+        logDir: resolve(runDirAbs, 'logs'),
+        onExit: (code) => {
+          void this.finalize(id, code)
+            .catch(() => {
+              /* finalize failures are logged by the host adapter */
+            })
+            .then(() => this.notifyExit(id, code))
+        },
+      })
+
+      const started: ExperimentRun = {
+        ...run,
+        status: 'running',
+        pid: spawned.pid,
+        pgid: spawned.pgid,
+        startedAt: Date.now(),
+      }
+      await this.persistRun(started)
+      return started
+    } catch (error) {
+      await this.abortStart(run).catch(() => undefined)
+      throw error
+    }
+  }
+
+  // ── GPU allocation (DESIGN §19) ───────────────────────────────────────────
+
+  /**
+   * Reservation-aware allocation: candidates come from the scheduler
+   * (hardware state minus cards held by live runs); the store's
+   * tryReserveGpus is the atomic claim. Losing a race to a concurrent
+   * starter just recomputes candidates and retries.
+   */
+  private async allocateGpus(runId: string, request?: RunResourceRequest): Promise<number[]> {
+    for (let attempt = 0; ; attempt++) {
+      const live = await this.liveReservations()
+      const gpuIds = await this.deps.scheduler.allocate(request ?? { mode: 'explicit' }, {
+        excludedGpuIds: [...live.keys()],
+      })
+      if (await this.deps.store.tryReserveGpus(gpuIds, runId)) return gpuIds
+      if (attempt >= 2) throw new Error('GPU reservation lost to concurrent starters')
+    }
+  }
+
+  /**
+   * Live-run reservations (gpuId → runId). Rows whose run is missing or
+   * terminal are stale — a crashed launch or a lost finalizer — and are
+   * swept here: self-healing without a background job.
+   */
+  private async liveReservations(): Promise<Map<number, string>> {
+    const live = new Map<number, string>()
+    for (const r of await this.deps.store.listReservations()) {
+      const run = await this.deps.store.getRun(r.runId)
+      if (!run || isTerminal(run.status)) {
+        await this.deps.store.releaseGpus(r.runId)
+        continue
+      }
+      live.set(r.gpuId, r.runId)
+    }
+    return live
+  }
+
+  /**
+   * A start that failed after the run record exists: record the failure,
+   * release any reservation, remove the worktree. The row stays — the id
+   * counter must never reuse an identity — and explains why nothing ran.
+   */
+  private async abortStart(run: ExperimentRun): Promise<void> {
+    await this.deps.store.releaseGpus(run.id)
+    await this.persistRun({ ...run, status: 'failed', finishedAt: Date.now() })
+    if (run.worktreePath) {
+      await this.deps.git.removeWorktree(run.worktreePath, { force: true }).catch(() => undefined)
+    }
   }
 
   /** Persist + mirror into the manifest. */
@@ -268,9 +338,8 @@ export class RunService {
     // ingest summary metrics when the project wrote them
     await this.ingestSummaryMetrics(run)
 
-    // release GPUs
-    const gpuIds = (run.resources as { gpuIds?: number[] })?.gpuIds
-    if (gpuIds) for (const g of gpuIds) await this.deps.store.releaseGpu(g)
+    // release this run's GPU reservations (by owner — never another run's)
+    await this.deps.store.releaseGpus(run.id)
 
     // remove the run worktree; the snapshot ref stays forever
     if (run.worktreePath) {
@@ -315,6 +384,26 @@ export class RunService {
   }
 
   /**
+   * Hardware snapshot merged with live-run reservations: a reserved card
+   * counts as running even before CUDA allocates its memory — what
+   * lab_get_resources and the panel show, and what keeps concurrent
+   * submissions from piling onto one card.
+   */
+  async resourceSnapshot(): Promise<ResourceView> {
+    const snap = await this.deps.scheduler.snapshot()
+    const byGpu = new Map<number, string[]>()
+    for (const [gpuId, runId] of await this.liveReservations()) {
+      const list = byGpu.get(gpuId) ?? []
+      list.push(runId)
+      byGpu.set(gpuId, list)
+    }
+    return {
+      ...snap,
+      gpus: snap.gpus.map((g) => ({ ...g, runningRunIds: byGpu.get(g.id) ?? g.runningRunIds })),
+    }
+  }
+
+  /**
    * Cross-process finalization: a run the DB calls running whose pid is dead
    * is finalized from the wrapper's on-disk exit code (succeeded/failed), or
    * marked lost when no code was recorded (hard crash). Live pids are
@@ -322,6 +411,15 @@ export class RunService {
    */
   private async syncRunStatus(run: ExperimentRun): Promise<ExperimentRun> {
     if (isTerminal(run.status)) return run
+    // a launching run (skeleton persisted, not yet spawned) must not be
+    // finalized as lost by a concurrent reader — give the launcher its window
+    if (
+      run.status === 'starting' &&
+      run.pid === undefined &&
+      Date.now() - run.createdAt < STARTING_GRACE_MS
+    ) {
+      return run
+    }
     if (run.pid !== undefined) {
       if (await this.deps.runner.isAlive(run.id)) return run // tracked in-process
       if (this.deps.runner.isPidAlive(run.pid)) return run // adopted, still running
@@ -358,9 +456,9 @@ export class RunService {
     await this.deps.runner.stop(run.id)
     const canceled: ExperimentRun = { ...run, status: 'canceled', finishedAt: Date.now() }
     await this.persistRun(canceled)
-    // release GPUs + clean the worktree eagerly; the exit callback may race
-    const gpuIds = (run.resources as { gpuIds?: number[] })?.gpuIds
-    if (gpuIds) for (const g of gpuIds) await this.deps.store.releaseGpu(g)
+    // release this run's reservations (by owner) + clean the worktree eagerly;
+    // the exit callback may race
+    await this.deps.store.releaseGpus(run.id)
     if (run.worktreePath) {
       await this.deps.git.removeWorktree(run.worktreePath, { force: true }).catch(() => undefined)
     }

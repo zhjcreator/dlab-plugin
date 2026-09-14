@@ -95,11 +95,18 @@ export interface StorePort {
   upsertRunMetric(metric: import('@dsh-lab/shared').RunMetric): Promise<void>
   listRunMetrics(runId: string): Promise<import('@dsh-lab/shared').RunMetric[]>
 
-  nextRunCounter(): Promise<number>
+  /**
+   * Atomically allocate the next run id and insert its starting-row
+   * skeleton — concurrent starters get distinct ids, and GPU reservations
+   * always reference a run row that exists.
+   */
+  allocateRunId(input: { projectId: string; solutionId: string; experimentsDir: string }): Promise<{ id: string; runDir: string }>
 
   listReservations(): Promise<import('@dsh-lab/shared').GpuReservation[]>
-  reserveGpu(gpuId: number, runId: string): Promise<void>
-  releaseGpu(gpuId: number): Promise<void>
+  /** All-or-nothing GPU reservation for one run; false when any card is taken. */
+  tryReserveGpus(gpuIds: number[], runId: string): Promise<boolean>
+  /** Release every reservation held by one run (owner-correct by run_id). */
+  releaseGpus(runId: string): Promise<void>
 
   listEvents(limit?: number): Promise<import('@dsh-lab/shared').LabEvent[]>
   appendEvent(event: { type: import('@dsh-lab/shared').LabEventType; entityType?: 'solution' | 'run'; entityId?: string; payload?: Record<string, unknown> }): Promise<void>
@@ -133,12 +140,16 @@ export interface RunnerPort {
   }>
 }
 
-/** GPU discovery + reservation. Implemented by @dsh-lab/scheduler. */
+/** GPU discovery + picking. Implemented by @dsh-lab/scheduler. */
 export interface SchedulerPort {
   discover(): Promise<import('@dsh-lab/shared').GpuState[]>
-  /** Atomically allocate GPUs; rejects with details when insufficient. */
-  allocate(request: RunResourceRequest): Promise<number[]>
-  release(gpuIds: number[]): Promise<void>
+  /**
+   * Pick GPUs for a request. `excludedGpuIds` are the cards held by live-run
+   * reservations — the store is the reservation authority, the caller passes
+   * the live set, and the store's atomic tryReserveGpus serializes the final
+   * claim (DESIGN §19). Rejects when the request cannot be met.
+   */
+  allocate(request: RunResourceRequest, opts?: { excludedGpuIds?: number[] }): Promise<number[]>
   snapshot(): Promise<import('@dsh-lab/shared').ResourceView>
 }
 

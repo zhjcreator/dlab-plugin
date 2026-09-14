@@ -213,7 +213,8 @@ export function apply(ctx: Context): void {
   ctx.tools.register(
     defineTool({
       name: 'lab_get_resources',
-      description: 'Show GPU resources: per-GPU free VRAM and running runs.',
+      description:
+        'Show GPU resources: per-GPU free VRAM and running runs. Cards reserved by submitted-but-not-yet-started runs count as running (a card is held from submission until its run finishes).',
       parameters: {},
       output: { schema: { type: 'json' }, render: jsonRender },
       async execute(_args, exec) {
@@ -476,7 +477,7 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'lab_start_run',
       description:
-        'Start an experiment run on a solution. Snapshots the current working tree immutably (uncommitted changes included, branch untouched), materializes a detached run worktree, and launches the command there with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits to the solution never affect the run. The run is registered as a DSH background job (kind lab-run, e.g. job id lab-run-3) owned by this session: you are notified in-session when the run settles — do not busy-poll lab_list_runs; track the run live with job_output (streams the run stdout) and stop it with job_kill or lab_stop_run. Disposing the owning session cancels its runs.',
+        'Start an experiment run on a solution. Snapshots the current working tree immutably (uncommitted changes included, branch untouched), materializes a detached run worktree, and launches the command there with DSH_LAB_RUN_DIR pointing at experiments/run-NNNNNN. Later edits to the solution never affect the run. GPU allocation is exclusive per card and reservation-backed: concurrent submissions spread across free cards, and each run holds its cards from submission until it finishes — submit several tasks at once and they will NOT pile onto one card. A run without GPU parameters takes one free card when available and otherwise proceeds on CPU (no CUDA_VISIBLE_DEVICES); an explicit gpuCount/minFreeVramMB request fails loudly when no card satisfies it. The run is registered as a DSH background job (kind lab-run, e.g. job id lab-run-3) owned by this session: you are notified in-session when the run settles — do not busy-poll lab_list_runs; track the run live with job_output (streams the run stdout) and stop it with job_kill or lab_stop_run. Disposing the owning session cancels its runs.',
       parameters: {
         solution: { type: 'string', required: true, description: 'Solution id or slug' },
         command: {
@@ -492,7 +493,10 @@ export function apply(ctx: Context): void {
           description:
             'Labels for this run. Convention: parameter sweeps share one `sweep/<name>` tag plus a per-run `<param>=<value>` tag (e.g. lr=0.01), so runs group in the panel and stay diffable.',
         },
-        gpuCount: { type: 'number', description: 'Auto-allocate this many GPUs' },
+        gpuCount: {
+          type: 'number',
+          description: 'Auto-allocate this many GPUs (exclusive per card; the call fails when none free)',
+        },
         minFreeVramMB: { type: 'number', description: 'Minimum free VRAM per GPU (MB)' },
       },
       output: { schema: { type: 'json' }, render: jsonRender },

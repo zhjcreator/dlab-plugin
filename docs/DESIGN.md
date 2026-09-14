@@ -1012,10 +1012,14 @@ interface RunResourceRequest {
 }
 ```
 
-* `mode=explicit` → 直接使用 `gpuIds`，写 `CUDA_VISIBLE_DEVICES=<ids>`
+* `mode=explicit` → 直接使用 `gpuIds`，写 `CUDA_VISIBLE_DEVICES=<ids>`；目标卡不存在/被预约/显存不足时响亮失败（不再静默顶号）
 * `mode=auto` → 由本插件 GPU Scheduler 探测 `nvidia-smi`、按 `gpuCount` + `minFreeVramMB` 选 GPU
-* reservation 通过 SQLite 表 `gpu_reservations(gpu_id PK, run_id, reserved_at)` 保证并发原子性
-* 同一 `scheduler.lock` 串行化所有 reservation 操作，避免两个 Run 同时分配到同一张卡
+* reservation 通过 SQLite 表 `gpu_reservations(gpu_id PK, run_id, reserved_at)` 保证并发原子性：`tryReserveGpus` 在单个 immediate 写事务里 check-then-insert（in- and cross-process），抢输的一方换候选卡重试
+* "scheduler.lock" 即上述 SQLite 写事务；分配排除所有活跃 run 的预约卡（`allocate(request, { excludedGpuIds })`），预约自 run 落库（starting 骨架行）起生效——短时间连续提交会摊到不同卡，而不是挤在同一张
+* 释放按 `run_id` 归属（finalize/stop）；run 缺失或已终态的预约行在下次分配时自愈清扫
+* run id 由 `allocateRunId` 在同一事务内 COUNT+INSERT 骨架行原子分配，并发提交不会撞号
+* 资源快照（`lab_get_resources` / 面板）合并预约：已提交、尚未分配显存的卡也计入 runningRunIds
+* 显式请求（gpuCount/gpuIds/minFreeVramMB）无卡可用时响亮失败；未请求 GPU 的 run 尽力拿一块空卡、拿不到则不带 `CUDA_VISIBLE_DEVICES` 运行（CPU 回退）
 
 ---
 

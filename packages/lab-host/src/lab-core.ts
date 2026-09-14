@@ -180,6 +180,8 @@ export class LabCore {
   }
 
   async resourceView(): Promise<ResourceView> {
-    return this.deps.scheduler.snapshot()
+    // merged with live-run reservations: a reserved card shows as running
+    // even before CUDA allocates (DESIGN §19)
+    return this.runs.resourceSnapshot()
   }
 }
