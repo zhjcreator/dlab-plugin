@@ -30,6 +30,21 @@ See `docs/DESIGN.md` for the full design specification.
 | `packages/cli` | `dsh-lab` CLI (no DSH runtime needed) | no |
 | `tests/` | unit / integration / e2e / concurrency suites | mixed |
 
+## Deployment (per-profile tarball installs)
+
+Runtime packages ship as tarballs from `dist-tb/` into a dsh profile
+(`~/.dsh/profiles/<name>`): add `@dsh-lab/*` as `file:dist-tb/*.tgz` deps,
+mirror the same tarballs in `pnpm-workspace.yaml` `overrides:` (they pin the
+@dsh-lab family for nested deps), `pnpm install`, then **restart `dsh web`** —
+server rows load once at process start; source edits and repacks do not hot-reload.
+
+To expose the `dsh-lab` CLI on PATH in such a deployment, also depend on
+`@dsh-lab/cli` (it declares `bin/dsh-lab`) and link the profile's shim once:
+
+```bash
+ln -sf ~/.dsh/profiles/<name>/node_modules/.bin/dsh-lab ~/.local/bin/dsh-lab
+```
+
 ## Development
 
 ```bash

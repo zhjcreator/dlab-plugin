@@ -1039,7 +1039,7 @@ interface RunResourceRequest {
 
 **满卡即排队，不失败、不静默跑 CPU**（能 GPU 的必须 GPU；真正无需 GPU 的杂务走后台 bash，而非 dlab run）：
 
-* **卡选择权归 dlab**（v0.2.1 起）：命令必须 card-agnostic——argv 或 `resources.env` 里出现 `CUDA_VISIBLE_DEVICES=` 的提交**直接拒绝**（命令自带选卡会覆盖注入值：实际占一张卡、预约另一张，静默破坏预约；脚本内部硬编码 `export CUDA_VISIBLE_DEVICES` 同理，改脚本）。钉卡用 `gpuIds`（`lab_start_run` 参数 / CLI `--gpus 0,1`），满卡时排队等那些卡；多进程启动器（torchrun 等）用 `gpuCount: N`——注入的 `CUDA_VISIBLE_DEVICES` 在进程内重编号为 0..N-1，worker 端无感
+* **卡选择权归 dlab**（v0.2.1 起；v0.2.2 收紧守卫）：命令必须 card-agnostic——argv 或 `resources.env` 里**赋值** `CUDA_VISIBLE_DEVICES`（`VAR=<值>`，`=` 后紧跟值）的提交**直接拒绝**（命令自带选卡会覆盖注入值：实际占一张卡、预约另一张，静默破坏预约；脚本内部硬编码 `export CUDA_VISIBLE_DEVICES` 同理，改脚本）。**仅在日志/诊断/grep 里提及变量名不拦**（`echo CUDA_VISIBLE_DEVICES = 0`、`grep -rn CUDA_VISIBLE_DEVICES= docs/` 均可提交）——v0.2.1 的 `\s*=` 正则把"提及"误判为"赋值"，连续误伤合规提交，v0.2.2 改为 `=\S` 只拦真赋值；空赋值 `VAR= cmd`（屏蔽全部卡）不再拦截，其后果只是白占一张卡跑 CPU，不会双占预约。钉卡用 `gpuIds`（`lab_start_run` 参数 / CLI `--gpus 0,1`），满卡时排队等那些卡；多进程启动器（torchrun 等）用 `gpuCount: N`——注入的 `CUDA_VISIBLE_DEVICES` 在进程内重编号为 0..N-1，worker 端无感
 * **提交**：快照在**提交时**拍（Scenario B 跨排队等待成立——"提交的是什么，拿到卡后跑的就是什么"；快照 ref 永久保留，提升时从 ref materialize worktree，抗分支变化）。有空卡 → 原快速路径直接 starting→running；满卡 → `status='queued'` 落库（资源请求记在 `resources_json`），worktree 延迟到提升时创建
 * **分类**：分配失败时先判硬件——机器无 GPU 且未请求 → 不带 `CUDA_VISIBLE_DEVICES` 运行（唯一的 CPU 路径，保住无卡机器/CI）；请求在该硬件上永不可能（未知 gpuIds / 卡数超过机器 / minFreeVramMB 超过任何卡总量）→ 响亮失败；否则 → 排队。队列深度上限 50，防失控提交
 * **提升（pump）**：FIFO 按提交序扫描 + first-fit（队头大请求不阻塞后面的小请求）；`queued→starting` 用单条 `UPDATE ... WHERE status='queued'` 原子认领，多进程并发 pump 不会双启动；抢卡输给并发者 → 放回队列；launch 本身失败 → 记 failed 不重排

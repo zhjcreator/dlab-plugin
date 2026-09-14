@@ -195,7 +195,7 @@ export class RunService {
     await this.persistRun(run)
     writeFileSync(
       resolve(runDirAbs, 'manifest.json'),
-      JSON.stringify({ ...run, runDirAbsolute: runDirAbs }, null, 2),
+      JSON.stringify({ ...run, gpuIds: run.resources.gpuIds, runDirAbsolute: runDirAbs }, null, 2),
     )
     writeFileSync(resolve(runDirAbs, 'command.json'), JSON.stringify({ argv: input.command }, null, 2))
     if (envProbe.pythonVersion || envProbe.requirements) {
@@ -222,22 +222,25 @@ export class RunService {
   }
 
   /**
-   * Card selection belongs to dlab (DESIGN §19.1): a command that sets
-   * CUDA_VISIBLE_DEVICES itself would override the injected allocation and
+   * Card selection belongs to dlab (DESIGN §19.1): a command that ASSIGNS
+   * CUDA_VISIBLE_DEVICES would override the injected allocation and
    * silently break reservations — the run would use one card while another
-   * is reserved. Such submissions are rejected loudly with guidance; pinned
-   * cards are requested through gpuIds instead.
+   * is reserved. Only ASSIGNMENTS are rejected (`VAR=<value>`, a value
+   * directly after the `=`): merely mentioning the variable in logs,
+   * diagnostics or greps is fine and must stay submittable. Pinned cards
+   * are requested through gpuIds instead.
    */
   private rejectSelfSelectedGpus(input: StartRunInput): void {
-    const inline = input.command.find((arg) => /CUDA_VISIBLE_DEVICES\s*=/.test(arg))
+    const inline = input.command.find((arg) => /CUDA_VISIBLE_DEVICES=\S/.test(arg))
     const viaEnv = input.resources?.env?.CUDA_VISIBLE_DEVICES
     if (inline === undefined && viaEnv === undefined) return
     throw new InvalidStateError(
-      'the command selects GPUs itself — dlab owns card selection: keep the command card-agnostic ' +
-        '(no CUDA_VISIBLE_DEVICES in the command, the env, or the script; a script hardcoding ' +
-        'export CUDA_VISIBLE_DEVICES has the same effect) and pass gpuCount (any N free cards) or ' +
-        'gpuIds (pin exact cards) instead. dlab injects CUDA_VISIBLE_DEVICES for the allocated ' +
-        'cards; a self-selected card would silently break reservations' +
+      'the command ASSIGNS CUDA_VISIBLE_DEVICES — dlab owns card selection: never assign ' +
+        'CUDA_VISIBLE_DEVICES in the command or the script (a script hardcoding export ' +
+        'CUDA_VISIBLE_DEVICES has the same effect); pass gpuCount (any N free cards) or gpuIds ' +
+        '(pin exact cards) instead, and dlab injects CUDA_VISIBLE_DEVICES for the allocated ' +
+        'cards — a self-selected card would silently break reservations. Merely MENTIONING the ' +
+        'variable (logs, diagnostics, greps) is allowed; only assignments are rejected' +
         (inline !== undefined ? ` (offending argument: ${inline.slice(0, 80)})` : ''),
     )
   }
@@ -295,7 +298,11 @@ export class RunService {
     await this.persistRun(withResources)
     writeFileSync(
       resolve(runDirAbs, 'manifest.json'),
-      JSON.stringify({ ...withResources, runDirAbsolute: runDirAbs, worktreeAbsolute: worktreeAbs }, null, 2),
+      JSON.stringify(
+        { ...withResources, gpuIds: resources.gpuIds, runDirAbsolute: runDirAbs, worktreeAbsolute: worktreeAbs },
+        null,
+        2,
+      ),
     )
 
     const procEnv: Record<string, string> = {
@@ -464,7 +471,10 @@ export class RunService {
     await this.deps.store.upsertRun(run)
     const manifest = resolve(this.runDirAbs(run), 'manifest.json')
     try {
-      writeFileSync(manifest, JSON.stringify(run, null, 2))
+      // gpuIds is mirrored at the top level so humans and external tools
+      // reading the manifest see the same shape the RunView carries (it
+      // also stays nested under resources for the raw record)
+      writeFileSync(manifest, JSON.stringify({ ...run, gpuIds: run.resources.gpuIds }, null, 2))
     } catch {
       /* run dir may not exist yet during early writes */
     }

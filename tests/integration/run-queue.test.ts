@@ -212,15 +212,15 @@ describe('GPU wait-queue (DESIGN §19)', () => {
     25000,
   )
 
-  it('a command that selects its own card is rejected loudly with guidance', async () => {
+  it('a command that ASSIGNS its own card is rejected; merely mentioning the variable is fine', async () => {
     // inline env prefix inside a shell command
     await expect(
       runs.start({ solutionId: 'exp', command: ['bash', '-c', 'CUDA_VISIBLE_DEVICES=0 python train.py'] }),
-    ).rejects.toThrow(/dlab owns card selection/)
+    ).rejects.toThrow(/ASSIGNS CUDA_VISIBLE_DEVICES/)
     // the env(1) form
     await expect(
       runs.start({ solutionId: 'exp', command: ['env', 'CUDA_VISIBLE_DEVICES=0,1', 'python', 'train.py'] }),
-    ).rejects.toThrow(/card-agnostic/)
+    ).rejects.toThrow(/only assignments are rejected/)
     // via the resources env
     await expect(
       runs.start({
@@ -231,6 +231,30 @@ describe('GPU wait-queue (DESIGN §19)', () => {
     ).rejects.toThrow(/silently break reservations/)
     // nothing was created by the rejections
     expect((await runs.list()).every((r) => !r.title?.includes('train.py'))).toBe(true)
+
+    // mentions without assignment — logs, diagnostics, greps — MUST submit
+    const mention = await runs.start({
+      solutionId: 'exp',
+      title: 'mention-only',
+      command: [
+        'bash',
+        '-c',
+        'echo CUDA_VISIBLE_DEVICES = 0; grep -rn CUDA_VISIBLE_DEVICES= /dev/null || true',
+      ],
+    })
+    expect(['running', 'queued', 'succeeded']).toContain(mention.status)
+    await runs.stop(mention.id).catch(() => undefined)
+  })
+
+  it('manifest.json mirrors gpuIds at the top level (one shape for tools and humans)', async () => {
+    const a = await start('manifest-a', ['sleep', '60'])
+    const manifest = JSON.parse(readFileSync(join(labRoot, a.runDir, 'manifest.json'), 'utf8')) as {
+      gpuIds?: number[]
+      resources: { gpuIds?: number[] }
+    }
+    expect(manifest.gpuIds).toEqual(a.resources.gpuIds)
+    expect(manifest.resources.gpuIds).toEqual(a.resources.gpuIds)
+    await runs.stop(a.id)
   })
 
   it('a GPU-less machine: unrequested runs proceed on CPU, requests fail loudly', async () => {
