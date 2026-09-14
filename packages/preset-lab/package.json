@@ -2,12 +2,9 @@
   "name": "@dsh-lab/preset",
   "version": "0.1.2",
   "private": true,
-  "description": "DSH agent preset that grants every session the lab_* tools + lab context",
+  "description": "深度学习实验 agent preset — the deployable preset DIRECTORY (agent.cordis.yml + preset.yml + skills/), installed by scripts/install-preset.sh into $DSH_HOME/.agent-presets/<id>/. NOT a profile bundle: never add it to dsh.profile.bundles.",
   "type": "module",
   "files": ["preset.yml", "agent.cordis.yml", "skills"],
-  "dsh": {
-    "bundle": { "patch": "./agent.cordis.yml" }
-  },
   "scripts": {
     "test": "vitest run"
   },
