@@ -10,13 +10,16 @@
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { makeDeps } from '../../packages/cli/lib/cli.js'
 import { SolutionService, RunService } from '../../packages/core/lib/index.js'
 import type { LabDeps } from '../../packages/core/lib/index.js'
 
-const SANDBOX_ROOT = '/home2/zhanghanjin/WorkSpace/dsh-scholar/scratch-dlab'
+// Local integration sandbox. Override with DLAB_SANDBOX_ROOT=<dir> to keep
+// scratch dirs across runs; otherwise vitest uses the OS temp dir.
+const SANDBOX_ROOT = process.env.DLAB_SANDBOX_ROOT ?? join(tmpdir(), 'dlab-sandbox')
 
 let labRoot: string
 let deps: LabDeps
@@ -131,5 +134,30 @@ describe('promotion gate: main accepts only evidenced forks', () => {
     })
     expect(result.conflictFiles).toEqual([])
     expect((await solutions.get('gate-x')).status).toBe('active')
+  })
+
+  it('records a camelCase SolutionMerged event and a mergedAt timestamp', async () => {
+    // the into-target merge above must be dated ON THE ROW: the evolution
+    // list dates a merge from mergedAt
+    const merged = await solutions.get('gate-ok')
+    expect(merged.status).toBe('merged')
+    expect(typeof merged.mergedAt).toBe('number')
+    expect(merged.mergedAt).toBeGreaterThan(0)
+
+    // merges used to be invisible to the event log; the panel's Activity tab
+    // reads this event, so it must land with the camelCase face
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'gate-ev-src', name: 'Gate Ev Src' })
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'gate-ev-dst', name: 'Gate Ev Dst' })
+    const src = await solutions.get('gate-ev-src')
+    await solutions.merge({ sourceSolutionId: 'gate-ev-src', targetSolutionId: 'gate-ev-dst', mode: 'into-fork' })
+
+    const events = await deps.store.listEvents(50)
+    const merge = events.find((e) => e.type === 'SolutionMerged' && e.entityId === src.id)
+    expect(merge).toBeTruthy()
+    expect(typeof merge!.createdAt).toBe('number')
+    expect(merge!.createdAt).toBeGreaterThan(0)
+    const payload = JSON.parse(merge!.payloadJson ?? '{}') as { targetBranch?: string; mode?: string }
+    expect(payload.mode).toBe('into-fork')
+    expect(typeof payload.targetBranch).toBe('string')
   })
 })

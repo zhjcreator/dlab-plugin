@@ -1,7 +1,7 @@
 # DSH Deep Learning Lab Plugin — 设计文档
 
 > 项目代号：`dlab-plugin`
-> 仓库根目录：`/home2/zhanghanjin/WorkSpace/dlab-plugin`
+> 仓库根目录：`<this-repo>`（本文档不绑定具体路径，请按各自的工作环境替换）
 > 文档版本：v1.0（基于已确认的产品模型 + 当前 DSH 实际接口修正）
 
 本文档是 DSH Deep Learning Lab 插件的**设计与实现规格**。它直接对应 Agent 的工作指令，告诉 Agent 如何一步步实现。
@@ -200,7 +200,7 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 ├── .gitignore
 ├── .dsh/skills/                              # 项目级 skills
 │   ├── dsh-plugin-dev/                       # DSH 插件开发参考
-│   └── dsh-scholar/                          # 测试沙地说明(指向 /home2/.../dsh-scholar/)
+│   └── dsh-scholar/                          # 测试沙地说明(指向本地 sibling research project)
 ├── packages/
 │   ├── shared/                               # 仅类型 + ULID + 错误基类 + zod schema, 无 DSH 依赖
 │   │   ├── package.json
@@ -334,7 +334,7 @@ dlab-plugin/                                  ← 仓库根(pnpm workspace)
 
 ```text
 1.  dsh-lab status                  (无 lab state 时给出 init 引导)
-2.  dsh-lab init --root /home2/.../dsh-scholar
+2.  dsh-lab init --root <path-to-sandbox>    # 任意一个 git 工作树；可指向 `dsh-scholar/` sibling 或新建空仓库
 3.  dsh-lab solution fork main agm-cosine
 4.  (在 solutions/agm-cosine/ 改代码)
 5.  dsh-lab solution checkpoint agm-cosine -m "AGM cosine schedule"
@@ -1577,7 +1577,7 @@ merge conflict 工作流
 实现时遇到问题，**按优先级**查：
 
 1. **本设计文档** —— 项目级决策
-2. **`/home2/zhanghanjin/WorkSpace/dlab-plugin/.dsh/skills/dsh-plugin-dev`** —— DSH 插件开发标准（含 references/ 下的 plugin-anatomy / services / tools / connection-rpc / events / config / packaging / workspace-package / seams / three-roles）
+2. **`<this-repo>/.dsh/skills/dsh-plugin-dev`** —— DSH 插件开发标准（含 references/ 下的 plugin-anatomy / services / tools / connection-rpc / events / config / packaging / workspace-package / seams / three-roles）
 3. **`cordis_inspect_*` 实时查询** —— 当前 DSH 进程内的真实 Service / Event / Slot / Tool 签名
 4. **`ctx.agentPresets.list()` + `read(id)`** —— 读 `standard` preset 看 host + agent plane 的边界划分
 

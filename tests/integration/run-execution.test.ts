@@ -5,6 +5,7 @@
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -12,7 +13,9 @@ import { makeDeps } from '../../packages/cli/lib/cli.js'
 import { SolutionService, RunService } from '../../packages/core/lib/index.js'
 import type { LabDeps } from '../../packages/core/lib/index.js'
 
-const SANDBOX_ROOT = '/home2/zhanghanjin/WorkSpace/dsh-scholar/scratch-dlab'
+// Local integration sandbox. Override with DLAB_SANDBOX_ROOT=<dir> to keep
+// scratch dirs across runs; otherwise vitest uses the OS temp dir.
+const SANDBOX_ROOT = process.env.DLAB_SANDBOX_ROOT ?? join(tmpdir(), 'dlab-sandbox')
 
 let labRoot: string
 let deps: LabDeps

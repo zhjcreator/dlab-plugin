@@ -25,13 +25,16 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { makeDeps } from '../../packages/cli/lib/cli.js'
 import { SolutionService, DocsService } from '../../packages/core/lib/index.js'
 import type { LabDeps } from '../../packages/core/lib/index.js'
 
-const SANDBOX_ROOT = '/home2/zhanghanjin/WorkSpace/dsh-scholar/scratch-dlab'
+// Local integration sandbox. Override with DLAB_SANDBOX_ROOT=<dir> to keep
+// scratch dirs across runs; otherwise vitest uses the OS temp dir.
+const SANDBOX_ROOT = process.env.DLAB_SANDBOX_ROOT ?? join(tmpdir(), 'dlab-sandbox')
 
 let labRoot: string
 let deps: LabDeps
@@ -233,5 +236,25 @@ describe('shared documents (DESIGN §26)', () => {
     expect(lstatSync(link).isSymbolicLink()).toBe(true)
     // the stale copy is gone (it was shadowing the shared docs)
     expect(existsSync(join(labRoot, 'docs/stale.md'))).toBe(false)
+  })
+
+  it('reads a solution’s own note inside its worktree, and refuses to escape it', async () => {
+    await solutions.fork({ sourceSolutionId: 'main', slug: 'doc-read', name: 'Doc Read' })
+    const solution = await solutions.get('doc-read')
+    mkdirSync(join(labRoot, 'solutions/doc-read/notes'), { recursive: true })
+    writeFileSync(join(labRoot, 'solutions/doc-read/notes/plan.md'), '# plan\nstep one\n')
+
+    // the panel previews a solution note through this read
+    const note = docs.readSolutionFile(solution, 'notes/plan.md')
+    expect(note.text).toContain('step one')
+    expect(note.truncated).toBe(false)
+    expect(note.size).toBeGreaterThan(0)
+
+    // a path through the docs link reaches the shared copy
+    expect(docs.readSolutionFile(solution, 'docs/charter.md').text).toContain('# charter')
+
+    // traversal out of the worktree is refused
+    expect(() => docs.readSolutionFile(solution, '../../main/notes/plan.md')).toThrow(/escapes/)
+    expect(() => docs.readSolutionFile(solution, '')).toThrow(/required/)
   })
 })

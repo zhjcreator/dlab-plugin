@@ -4,12 +4,17 @@
   "private": true,
   "description": "深度学习实验 agent preset — the deployable preset DIRECTORY (agent.cordis.yml + preset.yml + skills/), installed by scripts/install-preset.sh into $DSH_HOME/.agent-presets/<id>/. NOT a profile bundle: never add it to dsh.profile.bundles.",
   "type": "module",
-  "files": ["preset.yml", "agent.cordis.yml", "skills"],
+  "files": [
+    "preset.yml",
+    "agent.cordis.yml",
+    "skills"
+  ],
   "scripts": {
     "test": "vitest run"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
-  }
+  },
+  "license": "MIT"
 }

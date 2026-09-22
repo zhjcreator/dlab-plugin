@@ -18,7 +18,9 @@ import { apply as promptApply, inject as promptInject } from '../../packages/lab
 import { LabCore } from '../../packages/lab-host/lib/lab-core.js'
 import { DshWorkspacePort } from '../../packages/lab-host/lib/workspace-port.js'
 
-const SANDBOX_ROOT = '/home2/zhanghanjin/WorkSpace/dsh-scholar/scratch-dlab'
+// Local integration sandbox. Override with DLAB_SANDBOX_ROOT=<dir> to keep
+// scratch dirs across runs; otherwise vitest uses the OS temp dir.
+const SANDBOX_ROOT = process.env.DLAB_SANDBOX_ROOT ?? join(tmpdir(), 'dlab-sandbox')
 
 let labA: string
 let ctx: Context

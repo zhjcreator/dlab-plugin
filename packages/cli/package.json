@@ -2,7 +2,7 @@
   "name": "@dsh-lab/cli",
   "version": "0.1.5",
   "private": true,
-  "description": "dsh-lab command line \u2014 full lifecycle validation without DSH",
+  "description": "dsh-lab command line — full lifecycle validation without DSH",
   "type": "module",
   "main": "./lib/index.js",
   "bin": {
@@ -29,5 +29,6 @@
     "@types/node": "^22.10.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
-  }
+  },
+  "license": "MIT"
 }

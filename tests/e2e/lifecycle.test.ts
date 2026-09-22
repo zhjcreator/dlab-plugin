@@ -14,7 +14,10 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const BIN = join(process.cwd(), 'packages/cli/bin/dsh-lab.js')
-const SANDBOX_ROOT = '/home2/zhanghanjin/WorkSpace/dsh-scholar/scratch-dlab'
+
+// Local integration sandbox. Override with DLAB_SANDBOX_ROOT=<dir> to keep
+// scratch dirs across runs; otherwise vitest uses the OS temp dir.
+const SANDBOX_ROOT = process.env.DLAB_SANDBOX_ROOT ?? join(tmpdir(), 'dlab-sandbox')
 
 let labRoot: string
 
