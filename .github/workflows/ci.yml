@@ -38,4 +38,8 @@ jobs:
         run: pnpm test:unit
 
       - name: Per-package tests (packages/*)
-        run: pnpm -r --filter './packages/**' test
+        # Each package's test script is `vitest run`; packages without any
+        # tests yet exit 1 by default, so pass --passWithNoTests so empty
+        # packages don't fail the build. Add real tests inside a package
+        # and they will be picked up here automatically.
+        run: pnpm -r --filter './packages/**' exec vitest run --passWithNoTests
