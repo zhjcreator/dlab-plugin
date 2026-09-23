@@ -1,8 +1,156 @@
 # dsh-lab — Deep Learning Lab plugin for DSH
 
-Monorepo for a DSH plugin managing parallel deep-learning research solutions:
-solution lifecycle (fork / checkpoint / archive / restore / merge), experiment
-runs with immutable git snapshots, and a shared Python environment.
+> 一个 DSH 插件：让 Agent 在你当前项目里并行做深度学习实验。
+> A DSH plugin that lets an Agent run parallel deep-learning experiments
+> inside your current project, by talking to it in natural language.
+
+![Overview: lifecycle graph + ACTIVE/MERGED/ARCHIVED solutions](docs/screenshots/overview.png)
+
+![Resources: 8× NVIDIA GeForce 24 GB panel](docs/screenshots/resources.png)
+
+## 这是什么 / What is this
+
+### 中文
+
+`dlab-plugin` 是给 [DeepSeek Harness](https://github.com/deepseek-ai) (DSH)
+写的一个插件，把「做深度学习研究」——这些原本散落在 shell、git、tmux、
+conda、`nvidia-smi` 里的事情——整合成一个由 **Agent** + **只读 Web 面板**
+协作完成的工作流。
+
+你用自然语言告诉 Agent「我想换一下 loss 看看」——Agent 会：
+
+1. 在当前项目里 fork 一条新的 git branch（一条独立的 worktree）
+2. 把你的修改提交成一次 checkpoint
+3. 调度空闲的 GPU 跑训练
+4. 训练过程被记为一次 Experiment run；一条 branch 上可以跑很多次
+5. 训完看结果，结论好就合回 main，不好就封存成 archive
+
+Web 面板（见上方两张截图）给你看「现在有几条 branch、每条上跑了几次、
+哪张 GPU 在用」，但**所有写操作都过 `lab_*` 工具**——面板本身只读。
+
+适用：一台多卡的实验室 / 个人 GPU 服务器 / 一台机器 8 卡的人。
+不适用：跨机多节点训练（调度器是单机设计的，多机需要扩展 scheduler）。
+
+### English
+
+`dlab-plugin` is a plugin for DeepSeek Harness (DSH) that turns "doing
+deep-learning research" — the part that normally lives scattered across
+shell, git, tmux, conda, and `nvidia-smi` — into a workflow split between
+an **Agent** and a **read-only Web panel**.
+
+You tell the Agent in natural language "let's try replacing the loss with X" —
+the Agent:
+
+1. forks a new git branch (an independent worktree) in your current project
+2. commits your change as a checkpoint
+3. schedules an idle GPU to run the training
+4. the training is recorded as one Experiment run — a branch can host many
+5. when training settles, look at the results; good → merge back to main,
+   bad → archive the branch
+
+The Web panel (screenshots above) shows "how many branches are alive, how
+many runs each carries, which GPUs are busy" — but **all writes go through
+the `lab_*` tools**. The panel is read-only.
+
+Fits: a single multi-GPU box, a lab server, a personal 8-GPU workstation.
+Does not fit: multi-node training across machines (the scheduler is
+single-host; extending it is non-trivial).
+
+## 核心思路 / Core Idea
+
+### 中文
+
+- **方案 (solution) = git worktree**。每条实验是 `main` 的一个 worktree，
+  独立 branch、独立依赖锁，互不污染。
+- **运行 (run) = 子进程 + 日志**。每次训练 fork 一个 detached 进程，stdout
+  落到 run 目录里，断电也不丢。
+- **证据门 (evidence gate)**。合回 `main` 必须有过 succeeded 的训练结果，
+  否则默认拒绝（带 `--allow-unevidenced` 显式 override）。半成品不上主干。
+- **共享文档一次写**。`docs/` 在所有 solution 之间共享；worktree 里的
+  `docs/` 是软链接，永远不会变成多份过时副本。
+- **GPU 排队而不是失败**。卡满就排队，等着新 run 自动接管释放出来的卡。
+- **Agent 即接口**。面板只读，所有写操作都得通过 Agent 的 `lab_*` 工具，
+  任何改动都过 DSH 的会话日志，可重建。
+
+### English
+
+- **Solution = git worktree**. Each experiment is its own worktree off
+  `main`, with its own branch and dependency lock; nothing leaks between them.
+- **Run = subprocess + log**. Each training spawns a detached process whose
+  stdout lands in the run directory; survives reboots.
+- **Evidence gate**. A merge into `main` requires at least one succeeded
+  run on that branch — half-finished work doesn't land on trunk. Pass
+  `--allow-unevidenced` to override deliberately.
+- **Shared docs, written once**. `docs/` is shared across all solutions;
+  a worktree's `docs/` is a symlink to it — never multiple stale copies.
+- **GPU queue, not failure**. Full machine → queued. New runs take over
+  GPUs as they're released.
+- **The Agent is the interface**. Panel is read-only; every write goes
+  through the Agent's `lab_*` tools, so every change is reconstructable
+  from the DSH session log.
+
+## 主要功能 / Features
+
+### 中文
+
+| 功能 | 说明 |
+| --- | --- |
+| 分支生命周期面板 | 主面板上半部（左列轨道图 + 右列事件列表）。`init` / `fork` / `merge` / `archive` 用 git-style lane graph 可视化。 |
+| 解决方案状态分类 | 主面板下半部 Overview：ACTIVE / MERGED INTO MAIN / ARCHIVED 三大类，每条 branch 显示状态、branch@commit、run 数。 |
+| 多 GPU 资源视图 | RESOURCES 区显示当前机器所有 GPU（截图为 8× GeForce 24GB），每张显示已用 / 总量 + 占用方。点 GPU 行可过滤到该卡上的所有 run。 |
+| 训练任务面板 | Runs tab（截图里 347 个 run）：按 solution 分组折叠，活跃 run 置顶，每条 run 显示提交时间、状态、GPU 占用、metrics。 |
+| 文档视图 | Docs tab：项目共享文档 + 每个 solution 的私有 notes；选中 solution 后该 solution 的内容置顶。 |
+| 活动流 | Activity tab：原始 event log，类型彩色点 + 名称（非 id），按时间倒序。 |
+| Agent 操作面板 | 面板本身只读；所有操作通过 DSH 会话里的 `lab_*` 工具（`fork` / `checkpoint` / `archive` / `restore` / `merge` / `start_run` …）。 |
+
+### English
+
+| Feature | What it does |
+| --- | --- |
+| Lifecycle panel | Top of the panel: a git-style lane graph (left) + an event list (right). `init`, `fork`, `merge`, `archive` events drawn on lanes. |
+| Solution status | Bottom of the panel (Overview): ACTIVE / MERGED INTO MAIN / ARCHIVED sections. Each row shows status, branch@commit, run count. |
+| Multi-GPU resources | The RESOURCES section shows every GPU on the box (8× GeForce 24 GB in the screenshot) with used/total + occupant. Click a GPU row to filter Runs to that card. |
+| Training runs | Runs tab (347 runs in the screenshot): grouped + folded by solution; live runs pinned to the top of each group; each row shows submit time, status, GPU, metrics. |
+| Documents | Docs tab: shared project documents + each solution's private notes. When a solution is selected, that solution's content goes on top. |
+| Activity | Activity tab: raw event log; type-coloured dots + names (not opaque ids); newest first. |
+| Agent surface | The panel itself is read-only. Every write goes through the `lab_*` tools (`fork`, `checkpoint`, `archive`, `restore`, `merge`, `start_run`, …) inside a DSH session. |
+
+## 快速上手 / Quick Start
+
+### 中文
+
+1. **克隆并构建**：
+   ```bash
+   git clone https://github.com/zhjcreator/dlab-plugin.git
+   cd dlab-plugin
+   pnpm install
+   pnpm build
+   ```
+2. **装到 DSH**：把 `dist-tb/` 里的 tarball 挂到你的 dsh profile 下并 `pnpm install`（详见「技术参考 / Initialization」）。
+3. **装 preset**：`./scripts/install-preset.sh` 把 `dlab` 智能体套装复制到 `~/.dsh/.agent-presets/`。
+4. **启动 DSH 并选 preset**：`dsh web`，在预设选择器里选「深度学习实验 / dlab」。
+5. **开干**：在 DSH 里用自然语言告诉 Agent 你想试的实验想法。
+
+### English
+
+1. **Clone and build**:
+   ```bash
+   git clone https://github.com/zhjcreator/dlab-plugin.git
+   cd dlab-plugin
+   pnpm install
+   pnpm build
+   ```
+2. **Install into DSH**: wire the tarballs in `dist-tb/` into your dsh profile and run `pnpm install` (see "Technical Reference / Initialization" below).
+3. **Install the preset**: `./scripts/install-preset.sh` copies the `dlab` agent preset into `~/.dsh/.agent-presets/`.
+4. **Run DSH and pick the preset**: `dsh web`, then select "dlab / 深度学习实验" from the preset picker.
+5. **Go**: in a DSH session, tell the Agent the experiment you want to try.
+
+---
+
+# 技术参考 / Technical Reference
+
+> 以下章节面向实现者与运维人员——架构、部署、安装、调试细节。
+> 普通用户只看上半部分就够了。
 
 Lab resolution is **per session cwd** (v0.1.3+): every consumer — `lab_*`
 tools, the `lab:context` prompt section, `DSH_LAB_*` shell variables, the
