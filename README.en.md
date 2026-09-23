@@ -61,6 +61,190 @@ Does not fit: multi-node training across machines (the scheduler is single-host;
 4. **Run DSH and pick the preset**: `dsh web`, then select "dlab / 深度学习实验" from the preset picker.
 5. **Go**: in a DSH session, tell the Agent the experiment you want to try.
 
+## Experiment project structure
+
+After `dsh-lab init` has been run on a project root, the directory looks like this:
+
+```
+<project-root>/
+├── .dsh-lab/                  # dlab state (git-ignored)
+│   ├── lab.sqlite             # metadata DB: solutions / runs / events / docs
+│   ├── repo.git/              # bare git repo — source for all branches & worktrees
+│   └── run-worktrees/         # one snapshot worktree per run
+├── docs/                      # shared documents (versioned under refs/dsh/docs;
+│   │                          # symlinked into every worktree)
+│   ├── .dlab/                 # generated snapshots + index (git-ignored)
+│   └── local/<slug>/          # conclusions promoted out of solutions
+├── solutions/                 # main + experiments, one worktree per branch
+│   ├── main/                  # worktree for the main branch
+│   └── exp-<slug>/            # worktrees for each forked experiment
+├── experiments/               # one directory per training run
+│   └── run-NNNNNN/
+│       ├── logs/stdout.log    # live stdout (job_output reads from here)
+│       ├── logs/stderr.log
+│       └── manifest.json      # snapshot metadata at submission: command,
+│                              # resources, environment fingerprint
+└── <your project code>/
+```
+
+Key design points:
+
+- **`.dsh-lab/repo.git` is a bare git repo**, not your project root's `.git/`. dlab's own refs (`refs/dsh/docs`, `refs/dsh/runs/`) live there and never enter your normal git history — your commit graph stays clean.
+- **Each solution is a worktree**: worktrees share the git database but their files are physically separate; nothing leaks between them.
+- **`docs/` is shared once across all solutions**: every worktree's `docs/` is a symlink to the shared root, so there are never multiple stale copies.
+
+## Solution and Run state machines
+
+**Solution (one experiment branch)**:
+
+| Status | Meaning |
+| --- | --- |
+| `active` | branch + worktree + DSH workspace all present |
+| `merged` | merged into another solution; branch kept, worktree usually removed |
+| `archived` | branch kept, worktree removed, no DSH workspace |
+| `broken` | DB disagrees with Git / FS / registry; repair required |
+
+**Run (one training submission)**:
+
+```
+queued ──▶ starting ──▶ running ──┬─▶ succeeded   (exit 0)
+                                  ├─▶ failed      (exit ≠ 0)
+                                  ├─▶ canceled    (SIGTERM / lab_stop_run / session dispose)
+                                  └─▶ lost        (process died without one — OOM, kill -9, power loss)
+```
+
+`queued → starting` is claimed before GPU allocation; once claimed, every exit leaves a definite state. `lost` strictly means "spawned and died without an exit code" — a submission that never started is recycled back to the queue rather than finalized as a phantom `lost`.
+
+## Typical workflow
+
+**Scenario**: you have a training entry `train.py` and want to try a new loss. Below is the actual chain — DSH-session dialogue, Agent tool calls, and system responses. Each step is labeled "you → Agent call → system reaction".
+
+### 1. Take stock
+
+```
+you: how many solutions are in this lab right now?
+agent: calls lab_status / lab_list_solutions
+system: the Overview panel's ACTIVE section updates; counts and last activity in DETAILS refresh
+```
+
+### 2. Open a new experiment
+
+```
+you: try focal loss, name it exp-focal-cos
+agent: calls lab_fork_solution({ source: "main", slug: "exp-focal-cos" })
+system:
+  - filesystem: a new solutions/exp-focal-cos/ appears (a physical copy worktree of main)
+  - git: a new exp/exp-focal-cos branch appears in .dsh-lab/repo.git
+  - DB: solutions table gets a role=experiment, status=active row
+  - panel: a new lane is drawn in the top lane graph (colour follows fork order); the
+    right-side event list adds a fork entry; Overview's ACTIVE section gets a new row
+```
+
+### 3. Edit code
+
+```
+you: replace CrossEntropyLoss with focal loss in train.py
+agent: edits train.py under solutions/exp-focal-cos/ via the fs tools (the file is dirty
+       until you ask for a commit — no impact on existing or queued runs)
+system:
+  - the worktree is dirty; the branch is unchanged, runs are not affected (runs use their
+    own snapshot worktree)
+  - panel: DETAILS' "Changes vs main" chips update in real time (diff stat)
+```
+
+### 4. Commit a checkpoint
+
+```
+you: commit it with message "switch loss to focal, lr 1e-4"
+agent: calls lab_checkpoint_solution({ solution: "exp-focal-cos", message: "..." })
+system:
+  - git: exp/exp-focal-cos branch gets a new commit
+  - DB: events table gets a solution_checkpointed row
+  - panel: the branch@commit column jumps to the new hash; DETAILS' facts refresh updated_at
+```
+
+### 5. Submit a training run
+
+```
+you: run it with `python train.py --config configs/a.yaml`
+agent: calls lab_start_run({ solution: "exp-focal-cos", command: [...], gpuCount: 2 })
+system (in order):
+  1. DB: a row is inserted into runs with status=queued
+  2. scheduler: scans for ≥2 free cards; if none, the row stays queued (FIFO queue)
+  3. cards claimed → status becomes starting → a snapshot worktree is created at
+     .dsh-lab/run-worktrees/run-NNNNNN/ (the code is frozen at submission time; later
+     edits in solutions/exp-focal-cos/ do not affect this run)
+  4. spawn a detached process → status=running → experiments/run-NNNNNN/logs/stdout.log
+     starts being appended
+  5. the GPU goes from idle to running in RESOURCES; the progress bar turns blue; the
+     occupant label shows the run id
+  6. process exits 0 → status=succeeded → GPU is released → the DSH session is woken
+     exactly ONCE (single wakeup at batch end, no polling needed)
+panel:
+  - Runs tab gets a new row, pinned to the top of its solution's group; the right metrics
+    block fills in
+  - Resources tab: that GPU's bar returns to idle if no other run is on it
+```
+
+The Agent receives `dshJobId` and `batchJobId` for this run. To stream progress: `job_output <dshJobId>`. To stop: `lab_stop_run` or `job_kill <dshJobId>`.
+
+### 6. Look at results
+
+```
+you: what's the final loss on this run?
+agent: calls lab_get_run({ runId: "run-000123" })
+system: aggregates from experiments/run-NNNNNN/manifest.json + DB; returns
+        { status, metrics, command, gpuIds, startedAt, endedAt, ... }
+panel: DETAILS' Metrics block refreshes
+```
+
+### 7. Decide: merge or archive
+
+**A. Merge into main**
+
+```
+you: merge it back into main
+agent: calls lab_merge_solution({ source: "exp-focal-cos", target: "main", mode: "into-target" })
+system:
+  - the evidence gate runs first: solutions.mergeEvidence("exp-focal-cos") → { runs, succeeded, ... }
+  - if succeeded=0 → hard refusal, nothing on git:
+      refusing to merge "exp-focal-cos" into "main": the line produced only 0 succeeded runs.
+      Run it first and promote only what succeeded, or pass allowUnevidenced to override deliberately.
+  - otherwise:
+    - merge with -X ours (your promotion cannot revert mainline docs/)
+    - git: main branch advances; exp/exp-focal-cos is kept
+    - DB: exp-focal-cos status=merged; events table gets solution_merged_into_main
+    - panel: Overview's MERGED INTO MAIN section gets a row; ACTIVE loses one
+    - Promotion block immediately shows "merged into main"
+```
+
+**B. Doesn't work — archive**
+
+```
+you: this line doesn't work; archive it. Conclusion: "focal loss unstable at small batch"
+agent: calls lab_archive_solution({ solution: "exp-focal-cos", conclusion: "..." })
+system:
+  - auto-checkpoints any dirty work (nothing is lost)
+  - removes solutions/exp-focal-cos/ worktree
+  - auto-promotes docs: notes/ and local/ are lifted to docs/local/exp-focal-cos/ (the
+    conclusion is preserved permanently in the shared docs tree)
+  - DB: status=archived
+  - panel: Overview loses the row in ACTIVE; gains one in ARCHIVED; Details still works
+    (the branch and all experiment records remain)
+```
+
+### 8. Shared documents
+
+```
+you: write the design rationale for this experiment into docs/design.md
+agent: calls lab_write_doc({ path: "design.md", content: "..." })
+system:
+  - writes to the shared docs/ root (NOT a per-solution subdir!)
+  - refs/dsh/docs gets a version commit
+  - panel: Docs tab gets a new entry; ALL solutions can see it immediately (because each
+    worktree's docs/ is a symlink to the shared root)
+```
+
 ---
 
 # Technical Reference

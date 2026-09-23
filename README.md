@@ -60,6 +60,177 @@ Web 面板（见上方两张截图）给你看「现在有几条 branch、每条
 4. **启动 DSH 并选 preset**：`dsh web`，在预设选择器里选「深度学习实验 / dlab」。
 5. **开干**：在 DSH 里用自然语言告诉 Agent 你想试的实验想法。
 
+## 实验项目组织结构
+
+`dsh-lab init` 在你的项目根目录上跑过一次之后，目录长这样：
+
+```
+<project-root>/
+├── .dsh-lab/                  # dlab 状态（不入 git）
+│   ├── lab.sqlite             # 元数据库：solutions / runs / events / docs
+│   ├── repo.git/              # 裸 git 仓；所有 branch 与 worktree 的源
+│   └── run-worktrees/         # 每次 run 的快照 worktree
+├── docs/                      # 共享文档（refs/dsh/docs 入库；symlink 进各 worktree）
+│   ├── .dlab/                 # 自动生成的快照 + 索引（git-ignored）
+│   └── local/<slug>/          # 各 solution 升上来的结论
+├── solutions/                 # 主 + 实验的 worktree（每条 branch 一个目录）
+│   ├── main/                  # main 分支的 worktree
+│   └── exp-<slug>/            # 各 fork 出来的实验 worktree
+├── experiments/               # 每次训练的输出
+│   └── run-NNNNNN/
+│       ├── logs/stdout.log    # 实时 stdout（job_output 也从这里读）
+│       ├── logs/stderr.log
+│       └── manifest.json      # 提交时的快照元数据：command、resources、environment fingerprint
+└── <你的项目代码>/
+```
+
+关键设计点：
+
+- **`.dsh-lab/repo.git` 是裸 git 仓**，不在你原项目根的 `.git/` 里。这样 dlab 引入的 branch / ref（`refs/dsh/docs`、`refs/dsh/runs/`）跟你的普通 git 历史完全隔离，不会污染你的 commit graph。
+- **每条 solution = 一个 worktree**：worktree 之间共享 git 数据库但文件物理隔离，互不污染。
+- **`docs/` 在所有 solution 之间共享一份**：每个 worktree 里的 `docs/` 是软链 → 共享根，永远不会变成多份过时副本。
+
+## Solution 与 Run 的状态机
+
+**Solution（一条实验分支）**：
+
+| 状态 | 含义 |
+| --- | --- |
+| `active` | branch + worktree + DSH workspace 全在 |
+| `merged` | 已合到另一条 solution；branch 保留，worktree 通常被移除 |
+| `archived` | branch 保留，worktree 被移除，没有 DSH workspace |
+| `broken` | DB 与 git/FS/registry 不一致，需要 `repair` |
+
+**Run（一次训练提交）**：
+
+```
+queued ──▶ starting ──▶ running ──┬─▶ succeeded   (exit 0)
+                                  ├─▶ failed      (exit ≠ 0)
+                                  ├─▶ canceled    (SIGTERM / lab_stop_run / session 销毁)
+                                  └─▶ lost        (进程死了但没拿到 exit code：OOM、kill -9、断电)
+```
+
+`queued → starting` 这一步在 GPU 分配之前划掉；一旦认领，每次退出都会留下一个确定状态。`lost` 严格指「曾经 spawn 过但死得没拿到 exit code」——「从未启动的种子」会被回收到队列而不是变成幻影 `lost`。
+
+## 典型工作流
+
+**场景**：你有一个训练脚本 `train.py`，想试试新的 loss。下面是从 DSH session 里实际发生的对话 + Agent 调用 + 系统反应的串联。每条都标了「用户 → Agent 调用 → 系统反应」。
+
+### 1. 起步：看现在 lab 长什么样
+
+```
+你：现在 lab 里有几条 solution？
+Agent：调 lab_status / lab_list_solutions
+系统反应：Overview 面板 ACTIVE 区立刻更新；DETAILS 里的 count 与 last activity 实时刷新
+```
+
+### 2. 开一条新实验
+
+```
+你：试一下把 loss 换成 focal loss，名字用 exp-focal-cos
+Agent：调 lab_fork_solution({ source: "main", slug: "exp-focal-cos" })
+系统反应：
+  - 文件系统：在 solutions/ 下新建 exp-focal-cos/（一份 main 的物理副本 worktree）
+  - git：.dsh-lab/repo.git 里多出 exp/exp-focal-cos branch
+  - DB：solutions 表插入一条 role=experiment status=active 的 row
+  - 面板：主面板顶部 lane graph 画出一条新 lane（颜色按 fork 顺序）；右侧事件列表多一条 fork 记录；
+    Overview 里 ACTIVE 区多一行
+```
+
+### 3. 改代码
+
+```
+你：把 train.py 里的 CrossEntropyLoss 换成 focal loss
+Agent：在 solutions/exp-focal-cos/ 下用 fs 工具改 train.py（用户没要求 commit 之前，文件是 dirty）
+系统反应：
+  - 工作树脏了，但 branch 没动、run 不会受影响（run 是独立 worktree 的快照）
+  - 面板：DETAILS 里"Changes vs main" chip 立刻更新（diff stat 实时）
+```
+
+### 4. 提交 checkpoint
+
+```
+你：commit 一下，message 写 "switch loss to focal, lr 1e-4"
+Agent：调 lab_checkpoint_solution({ solution: "exp-focal-cos", message: "..." })
+系统反应：
+  - git：exp/exp-focal-cos branch 多一个 commit
+  - DB：events 表多一条 solution_checkpointed
+  - 面板：branch@commit 列从 main 后面跳到新 commit hash；DETAILS 的 facts 里 updated_at 刷新
+```
+
+### 5. 跑一次训练
+
+```
+你：跑一下，命令是 python train.py --config configs/a.yaml
+Agent：调 lab_start_run({ solution: "exp-focal-cos", command: [...], gpuCount: 2 })
+系统反应（按时间顺序）：
+  1. DB：runs 表插入一行 status=queued
+  2. 调度：scanner 找到一张 ≥2 张空卡的 GPU 集合；如果没空闲 GPU，状态停留在 queued（FIFO 排队）
+  3. 拿到卡 → status 变 starting → 在 .dsh-lab/run-worktrees/run-NNNNNN/ 起快照 worktree
+     （这是提交时刻的代码快照；你之后在 solutions/exp-focal-cos/ 里再改代码也不会影响这次 run）
+  4. spawn detached 进程 → status=running，experiments/run-NNNNNN/logs/stdout.log 开始被 append
+  5. GPU 在 RESOURCES 里从 idle 变 running；状态条变蓝色；占用方写成 run id
+  6. Run 完成（exit 0）→ status=succeeded → 释放 GPU → 唤醒 DSH session（一次性 wakeup，不会逐次打扰）
+面板：
+  - Runs tab 多一行；solution 折叠组里置顶；右侧 metrics 块填上
+  - Resources tab 那张卡的进度条回到 idle（如果没别的 run 占它）
+```
+
+Agent 在 `<work_id>` 那一行获得 `dshJobId` 和 `batchJobId`。需要看进度：`job_output <dshJobId>`。需要停：`lab_stop_run` 或 `job_kill <dshJobId>`。
+
+### 6. 看结果
+
+```
+你：这个 run 的最终 loss 是多少？
+Agent：调 lab_get_run({ runId: "run-000123" })
+系统反应：从 experiments/run-NNNNNN/manifest.json + DB 里聚合；return { status, metrics, command, gpuIds, startedAt, endedAt, ... }
+面板：DETAILS 的 Metrics 块刷新一次
+```
+
+### 7. 决定合还是封
+
+**A. 合回 main**
+
+```
+你：合回 main
+Agent：调 lab_merge_solution({ source: "exp-focal-cos", target: "main", mode: "into-target" })
+系统反应：
+  - 证据门先跑：solutions.mergeEvidence("exp-focal-cos") → { runs, succeeded, ... }
+  - 如果 succeeded=0 → 直接拒绝，不动 git：
+      refusing to merge "exp-focal-cos" into "main": the line produced only 0 succeeded runs.
+      Run it first and promote only what succeeded, or pass allowUnevidenced to override deliberately.
+  - 否则：
+    - 用 -X ours 合并（你的 promote 不会回退主干的 docs/）
+    - git：main branch 推进；exp/exp-focal-cos 还在
+    - DB：exp-focal-cos status=merged；events 表多 solution_merged_into_main
+    - 面板：Overview 里 MERGED INTO MAIN 区多一行；ACTIVE 区少一行
+    - Promotion 块立刻显示"merged into main"
+```
+
+**B. 不行，封存**
+
+```
+你：这条不行，封掉，结论写 "focal loss 在小 batch 下不稳"
+Agent：调 lab_archive_solution({ solution: "exp-focal-cos", conclusion: "..." })
+系统反应：
+  - 自动 checkpoint 一次（dirty 工作不丢）
+  - 删除 solutions/exp-focal-cos/ worktree
+  - 自动 promote docs：把 notes/、local/ 升到 docs/local/exp-focal-cos/（结论在 shared docs 里永久保存）
+  - DB：status=archived
+  - 面板：Overview 里 ACTIVE 少一行；ARCHIVED 多一行；Details 还能查（branch + records 都还在）
+```
+
+### 8. 共享文档
+
+```
+你：把这次实验的设计思路写进 docs/design.md
+Agent：调 lab_write_doc({ path: "design.md", content: "..." })
+系统反应：
+  - 写到 docs/ 共享根（不是 solution 内的 subdir！）
+  - refs/dsh/docs 多一个版本 commit
+  - 面板：Docs tab 多一行；所有 solution 都立刻可见（因为每个 worktree 的 docs/ 是软链）
+```
+
 ---
 
 # 技术参考
